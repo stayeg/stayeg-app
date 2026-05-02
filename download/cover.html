@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StayEg Production Readiness Review - Cover</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #1e7694;
+    --accent-rgb: 30, 118, 148;
+    --text-primary: #1f1e1c;
+    --text-muted: #908c84;
+    --bg-page: #ffffff;
+  }
+
+  @page {
+    size: 794px 1123px;
+    margin: 0;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html, body {
+    width: 794px;
+    height: 1123px;
+    background: var(--bg-page);
+    font-family: 'Inter', sans-serif;
+  }
+
+  @media screen {
+    html {
+      height: auto;
+      display: flex;
+      justify-content: center;
+    }
+    body {
+      transform-origin: top center;
+      scale: min(1, calc(100vh / 1123));
+      margin: 0 auto;
+    }
+  }
+
+  .cover {
+    position: relative;
+    width: 794px;
+    height: 1123px;
+    background: #ffffff;
+  }
+
+  /* ── Layer 1: Background Grid ── */
+  .layer-1-bg {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  .grid-pattern {
+    position: absolute;
+    inset: 0;
+    background-image:
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 49px,
+        rgba(var(--accent-rgb), 0.02) 49px,
+        rgba(var(--accent-rgb), 0.02) 50px
+      ),
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 49px,
+        rgba(var(--accent-rgb), 0.02) 49px,
+        rgba(var(--accent-rgb), 0.02) 50px
+      );
+  }
+
+  /* ── Layer 2: Structure ── */
+  .layer-2-structure {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .left-anchor-line {
+    position: absolute;
+    left: calc(0.12 * 794px);
+    top: calc(0.10 * 1123px);
+    width: 6px;
+    height: calc(0.80 * 1123px);
+    background: var(--accent);
+  }
+
+  .meta-separator {
+    position: absolute;
+    left: calc(0.12 * 794px + 48px);
+    top: calc(0.68 * 1123px);
+    width: calc(0.35 * 794px);
+    height: 1px;
+    background: rgba(var(--accent-rgb), 0.4);
+  }
+
+  /* ── Layer 3: Content ── */
+  .layer-3-content {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .content-left {
+    position: absolute;
+    left: calc(0.12 * 794px + 48px);
+  }
+
+  /* A - Kicker */
+  .kicker {
+    position: absolute;
+    top: calc(0.15 * 1123px);
+    left: calc(0.12 * 794px + 48px);
+    font-size: 16px;
+    font-weight: 400;
+    letter-spacing: 3px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    text-transform: uppercase;
+  }
+
+  /* B - Hero Title */
+  .hero-title {
+    position: absolute;
+    top: calc(0.28 * 1123px);
+    left: calc(0.12 * 794px + 48px);
+    width: calc(0.70 * 794px);
+    font-size: 54px;
+    font-weight: 900;
+    color: var(--accent);
+    line-height: 1.15;
+    letter-spacing: -0.5px;
+  }
+
+  /* C - Summary */
+  .summary {
+    position: absolute;
+    top: calc(0.48 * 1123px);
+    left: calc(0.12 * 794px + 48px);
+    width: calc(0.58 * 794px);
+    font-size: 17px;
+    font-weight: 400;
+    color: var(--text-primary);
+    line-height: 1.6;
+    opacity: 0.85;
+  }
+
+  /* D - Meta */
+  .meta {
+    position: absolute;
+    top: calc(0.72 * 1123px);
+    left: calc(0.12 * 794px + 48px);
+    font-size: 18px;
+    font-weight: 400;
+    color: var(--text-primary);
+    line-height: 2.0;
+  }
+
+  .meta-date {
+    font-size: 16px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  /* Bottom decorative element */
+  .bottom-accent {
+    position: absolute;
+    bottom: calc(0.06 * 1123px);
+    right: calc(0.08 * 794px);
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 2px;
+    color: var(--text-muted);
+    opacity: 0.4;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <!-- Layer 1: Background -->
+    <div class="layer-1-bg">
+      <div class="grid-pattern"></div>
+    </div>
+
+    <!-- Layer 2: Structure -->
+    <div class="layer-2-structure">
+      <div class="left-anchor-line"></div>
+      <div class="meta-separator"></div>
+    </div>
+
+    <!-- Layer 3: Content -->
+    <div class="layer-3-content">
+      <!-- A - Kicker -->
+      <div class="kicker">PRODUCTION READINESS REVIEW</div>
+
+      <!-- B - Hero Title -->
+      <div class="hero-title">StayEg<br>Production<br>Readiness<br>Review</div>
+
+      <!-- C - Summary -->
+      <div class="summary">
+        Comprehensive assessment of the StayEg PG/Co-living management platform. 
+        Eight critical issues identified and resolved, 30 API routes migrated to 
+        service role key, and RLS policies hardened for production security.
+      </div>
+
+      <!-- D - Meta -->
+      <div class="meta">
+        <div style="font-weight: 600; color: var(--accent);">CTO Review</div>
+        <div class="meta-date">May 2, 2026</div>
+        <div class="meta-date">Confidential</div>
+      </div>
+    </div>
+
+    <!-- Bottom accent -->
+    <div class="bottom-accent">StayEg / CTO-2026-0502</div>
+  </div>
+</body>
+</html>
