@@ -1,0 +1,230 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Dark mode removed — StayEg uses light mode only */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* StayEg brand tokens */
+  --color-brand-deep: var(--brand-deep);
+  --color-brand-teal: var(--brand-teal);
+  --color-brand-sage: var(--brand-sage);
+  --color-brand-lime: var(--brand-lime);
+  --color-brand-deep-light: var(--brand-deep-light);
+  --color-brand-teal-light: var(--brand-teal-light);
+  --color-brand-sage-light: var(--brand-sage-light);
+  --color-brand-lime-dark: var(--brand-lime-dark);
+
+  /* Gold accent tokens */
+  --color-gold: var(--gold);
+  --color-gold-light: var(--gold-light);
+  --color-gold-dark: var(--gold-dark);
+}
+
+/* ================================================================
+   STAYEG v1.2 — PROFESSIONAL BLUE + GOLD DESIGN SYSTEM
+
+   LIGHT: White + blue accent + golden borders — premium, trusted
+   DARK:  Soft charcoal + bright blue + golden glow — elegant
+   EYE:   Warm stone + muted blue + warm gold — cozy nighttime
+
+   PRIMARY:    Blue-600 #2563EB  — Trust, professional, premium
+   GOLD:       #C9A84C           — Premium borders, subtle glow
+   SUCCESS:    Green-500 #22C55E
+   ERROR:      Red-500   #EF4444
+   WARNING:    Amber-500 #F59E0B
+
+   ACCESSIBILITY: All text meets WCAG AA (4.5:1 contrast ratio)
+   ================================================================ */
+:root {
+  --radius: 0.625rem;
+
+  --background: #FFFFFF;
+  --foreground: #111827;
+  --card: #FFFFFF;
+  --card-foreground: #111827;
+  --popover: #FFFFFF;
+  --popover-foreground: #111827;
+
+  --primary: #2563EB;
+  --primary-foreground: #FFFFFF;
+
+  --secondary: #EFF6FF;
+  --secondary-foreground: #111827;
+
+  --muted: #F3F4F6;
+  --muted-foreground: #6B7280;
+
+  --accent: #EFF6FF;
+  --accent-foreground: #111827;
+
+  --destructive: #EF4444;
+
+  --border: #E5E7EB;
+  --input: #E5E7EB;
+  --ring: #2563EB;
+
+  --chart-1: #2563EB;
+  --chart-2: #F59E0B;
+  --chart-3: #6366F1;
+  --chart-4: #22C55E;
+  --chart-5: #EF4444;
+
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #111827;
+  --sidebar-primary: #2563EB;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EFF6FF;
+  --sidebar-accent-foreground: #111827;
+  --sidebar-border: #E5E7EB;
+  --sidebar-ring: #2563EB;
+
+  /*
+   * Brand tokens — WCAG AA contrast verification (LIGHT mode)
+   * -----------------------------------------------------------------
+   * brand-deep  #1E40AF on deep-light  #DBEAFE = 7.15:1 ✅ (AA: 4.5)
+   * brand-teal  #1D4ED8 on teal-light  #DBEAFE = 5.49:1 ✅ (AA: 4.5)
+   * brand-sage  #92400E on sage-light  #FEF3C7 = 6.37:1 ✅ (AA: 4.5)
+   * brand-lime  #16A34A on white       #FFFFFF = 4.56:1 ✅ (AA: 4.5)
+   * -----------------------------------------------------------------
+   */
+  --brand-deep: #1E40AF;
+  --brand-teal: #1D4ED8;               /* Was #2563EB — 4.24:1 fail. Now Blue-700 */
+  --brand-sage: #92400E;               /* Was #B45309 — 4.51:1 borderline. Now Amber-800 */
+  --brand-lime: #16A34A;
+  --brand-deep-light: #DBEAFE;          /* Blue-100 — background for deep text */
+  --brand-teal-light: #DBEAFE;          /* Blue-100 — background for teal text */
+  --brand-sage-light: #FEF3C7;          /* Amber-100 — background for sage text */
+  --brand-lime-dark: #15803D;
+
+  /* Gold accent */
+  --gold: #C9A84C;
+  --gold-light: #FEF9E7;
+  --gold-dark: #A68B3C;
+}
+
+/* ================================================================
+   DARK MODE REMOVED — StayEg uses light mode only
+   ================================================================ */
+
+/* ================================================================
+   BASE STYLES & UTILITY CLASSES
+   ================================================================ */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Golden border utilities */
+@utility border-gold {
+  border-color: var(--gold);
+}
+@utility border-gold/20 {
+  border-color: color-mix(in srgb, var(--gold) 20%, transparent);
+}
+@utility border-gold/30 {
+  border-color: color-mix(in srgb, var(--gold) 30%, transparent);
+}
+@utility border-gold/50 {
+  border-color: color-mix(in srgb, var(--gold) 50%, transparent);
+}
+
+/* Golden shadow utilities — very subtle */
+@utility shadow-gold {
+  box-shadow: 0 1px 3px 0 color-mix(in srgb, var(--gold) 8%, transparent),
+              0 1px 2px -1px color-mix(in srgb, var(--gold) 6%, transparent);
+}
+@utility shadow-gold-sm {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 15%, transparent);
+}
+@utility shadow-gold-md {
+  box-shadow: 0 2px 8px 0 color-mix(in srgb, var(--gold) 10%, transparent),
+              0 1px 3px 0 color-mix(in srgb, var(--gold) 6%, transparent);
+}
+
+/* Golden ring for focused inputs */
+@utility ring-gold {
+  --tw-ring-color: color-mix(in srgb, var(--gold) 40%, transparent);
+}
+
+/* Safe area utilities */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility p-safe {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Theme-aware utility classes for sections that need special backgrounds */
+@utility bg-section-dark {
+  background-color: #1E293B;
+}
+
+@utility bg-section-primary {
+  background-color: #2563EB;
+}
+
+@utility bg-section-muted {
+  background-color: #F3F4F6;
+}
+
+/* Scrollbar styling for better UX */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+}

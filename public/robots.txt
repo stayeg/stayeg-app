@@ -1,0 +1,48 @@
+# StayEg Robots.txt
+# https://stayeg.com
+
+# Sitemap
+Sitemap: https://stayeg.com/sitemap.xml
+
+# Crawl-delay (respectful crawling)
+Crawl-delay: 1
+
+# Allow all crawlers on all content
+User-agent: *
+Allow: /
+
+# Major search engine crawlers — full access
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Slurp
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+User-agent: Baiduspider
+Allow: /
+
+User-agent: YandexBot
+Allow: /
+
+# Social media preview crawlers
+User-agent: Twitterbot
+Allow: /
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+# Disallow admin/internal paths (future-proofing)
+Disallow: /api/
+Disallow: /_next/
+
+# Allow static assets from _next for social crawlers
+Allow: /_next/static/
