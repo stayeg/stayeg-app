@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
 import { captureException } from '@/lib/sentry-server';
+import { getPaginationParams, applyPaginationRange, createPaginatedResponse } from '@/lib/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,13 +25,18 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('bookings')
-      .select('*, pg:pgs(id,name,address,city,images), bed:beds(*, room:rooms(room_code,room_type,floor)), user:users(id,name,email,phone,avatar), payments:payments(*)')
+      .select('*, pg:pgs(id,name,address,city,images), bed:beds(*, room:rooms(room_code,room_type,floor)), user:users(id,name,email,phone,avatar), payments:payments(*)', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (userId) query = query.eq('user_id', userId);
     if (pgId) query = query.eq('pg_id', pgId);
 
-    const { data: bookings, error } = await query;
+    // Apply pagination
+    const pagination = getPaginationParams(request);
+    const { from, to } = applyPaginationRange(pagination);
+    query = query.range(from, to);
+
+    const { data: bookings, count, error } = await query;
     if (error) {
       console.error('Error fetching bookings:', error.message);
       return NextResponse.json({ error: 'Failed to fetch bookings' }, { status: 500 });
@@ -46,7 +52,7 @@ export async function GET(request: NextRequest) {
         : undefined,
     }));
 
-    return NextResponse.json(formatted);
+    return NextResponse.json(createPaginatedResponse(formatted, count || 0, pagination));
   } catch (error) {
     captureException(error, { endpoint: 'GET /api/bookings' });
     console.error('Error fetching bookings:', error);

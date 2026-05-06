@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
@@ -24,7 +25,8 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(rooms || []);
-  } catch {
+  } catch (error) {
+    captureException(error, { endpoint: 'GET /api/rooms' });
     return NextResponse.json({ error: 'Failed to fetch rooms' }, { status: 500 });
   }
 }
@@ -101,7 +103,8 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
 
     return NextResponse.json(room, { status: 201 });
-  } catch {
+  } catch (error) {
+    captureException(error, { endpoint: 'POST /api/rooms' });
     return NextResponse.json({ error: 'Failed to create room' }, { status: 500 });
   }
 }
@@ -160,7 +163,8 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
 
     return NextResponse.json(room);
-  } catch {
+  } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/rooms' });
     return NextResponse.json({ error: 'Failed to update room' }, { status: 500 });
   }
 }
@@ -221,7 +225,8 @@ export async function DELETE(request: NextRequest) {
     if (error) throw error;
 
     return NextResponse.json({ success: true });
-  } catch {
+  } catch (error) {
+    captureException(error, { endpoint: 'DELETE /api/rooms' });
     return NextResponse.json({ error: 'Failed to delete room' }, { status: 500 });
   }
 }

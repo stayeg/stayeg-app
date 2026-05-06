@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
@@ -86,6 +87,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(bed, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/beds' });
     console.error('Error creating bed:', error);
     return NextResponse.json(
       { error: 'Failed to create bed' },
@@ -171,6 +173,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json(bed);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/beds' });
     console.error('Error updating bed:', error);
     return NextResponse.json(
       { error: 'Failed to update bed' },

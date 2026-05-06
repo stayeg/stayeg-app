@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
@@ -94,6 +95,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(tenants);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/tenants' });
     console.error('GET /api/tenants error:', error);
     return NextResponse.json({ error: 'Failed to fetch tenants' }, { status: 500 });
   }
@@ -175,6 +177,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(booking, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/tenants' });
     console.error('POST /api/tenants error:', error);
     return NextResponse.json({ error: 'Failed to create tenant' }, { status: 500 });
   }
@@ -241,6 +244,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json(booking);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/tenants' });
     console.error('PUT /api/tenants error:', error);
     return NextResponse.json({ error: 'Failed to update tenant' }, { status: 500 });
   }
@@ -285,6 +289,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    captureException(error, { endpoint: 'DELETE /api/tenants' });
     console.error('DELETE /api/tenants error:', error);
     return NextResponse.json({ error: 'Failed to delete tenant' }, { status: 500 });
   }

@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
@@ -42,6 +43,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(workers || []);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/workers' });
     console.error('GET /api/workers error:', error);
     return NextResponse.json({ error: 'Failed to fetch workers' }, { status: 500 });
   }
@@ -87,6 +89,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(worker, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/workers' });
     console.error('POST /api/workers error:', error);
     return NextResponse.json({ error: 'Failed to create worker' }, { status: 500 });
   }
@@ -146,6 +149,7 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(worker);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/workers' });
     console.error('PUT /api/workers error:', error);
     return NextResponse.json({ error: 'Failed to update worker' }, { status: 500 });
   }

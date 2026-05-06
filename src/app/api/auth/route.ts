@@ -18,6 +18,7 @@ import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { hashPassword, verifyPassword } from '@/lib/password';
 import { signToken } from '@/lib/jwt';
 import { captureException } from '@/lib/sentry-server';
+import { isValidEmail, isValidPhone, stripHtml, isValidLength } from '@/lib/validation';
 
 // Safe user fields — NEVER include password_hash in API responses
 const SAFE_USER_FIELDS = 'id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,bank_account_number,bank_ifsc,bank_name,account_holder_name,upi_id';
@@ -143,12 +144,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!password || password.length < 6) {
+    // Validate email format
+    if (!isValidEmail(email)) {
       return NextResponse.json(
-        { error: 'Password must be at least 6 characters' },
+        { error: 'Please enter a valid email address' },
         { status: 400 }
       );
     }
+
+    // Validate phone format (if provided)
+    if (phone && !isValidPhone(phone)) {
+      return NextResponse.json(
+        { error: 'Please enter a valid Indian phone number' },
+        { status: 400 }
+      );
+    }
+
+    if (!password || password.length < 8) {
+      return NextResponse.json(
+        { error: 'Password must be at least 8 characters' },
+        { status: 400 }
+      );
+    }
+
+    if (password.length > 128) {
+      return NextResponse.json(
+        { error: 'Password must be at most 128 characters' },
+        { status: 400 }
+      );
+    }
+
+    // Sanitize text inputs
+    const sanitizedName = stripHtml(String(name).trim()).slice(0, 100);
+    const sanitizedBio = bio ? stripHtml(String(bio).trim()).slice(0, 500) : null;
+    const sanitizedCity = city ? stripHtml(String(city).trim()).slice(0, 50) : null;
+    const sanitizedOccupation = occupation ? stripHtml(String(occupation).trim()).slice(0, 100) : null;
 
     const normalizedEmail = email.toLowerCase().trim();
 
@@ -197,16 +227,16 @@ export async function POST(request: NextRequest) {
     const { data: insertedUser, error: insertError } = await supabaseAdmin
       .from('users')
       .insert({
-        name,
+        name: sanitizedName,
         email: normalizedEmail,
         phone: phone ? phone.trim() : null,
         role: userRole,
         gender: gender || null,
         is_verified: isApproved,
         is_approved: isApproved,
-        bio: bio || null,
-        city: city || null,
-        occupation: occupation || null,
+        bio: sanitizedBio,
+        city: sanitizedCity,
+        occupation: sanitizedOccupation,
         password_hash: hashedPassword,
       })
       .select(SAFE_USER_FIELDS)
@@ -226,6 +256,14 @@ export async function POST(request: NextRequest) {
       email: user.email,
       role: user.role,
     });
+
+    // Send welcome email (async, don't block registration)
+    try {
+      const { sendWelcomeEmail } = await import('@/lib/notifications');
+      sendWelcomeEmail({ name: user.name, email: user.email, role: user.role }).catch(() => {});
+    } catch {
+      // Notification failure shouldn't block registration
+    }
 
     return NextResponse.json({ user, token }, { status: 201 });
   } catch (error) {

@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
@@ -24,6 +25,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(vendors || []);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/vendors' });
     console.error('GET /api/vendors error:', error);
     return NextResponse.json({ error: 'Failed to fetch vendors' }, { status: 500 });
   }
@@ -57,6 +59,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(vendor, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/vendors' });
     console.error('POST /api/vendors error:', error);
     return NextResponse.json({ error: 'Failed to create vendor' }, { status: 500 });
   }

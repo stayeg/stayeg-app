@@ -33,3 +33,39 @@ Stage Summary:
 - Health check endpoint available at /api/health
 - NEXT_PUBLIC_SENTRY_DSN still empty in .env — user needs to create Sentry account and add DSN
 - Supabase Auth settings need manual Dashboard configuration
+
+---
+Task ID: phase4
+Agent: Main Agent
+Task: Phase 4 — Production Hardening (49 issues across 13 areas)
+
+Work Log:
+- Fixed URGENT BUG: /api/payments POST referenced undefined `status` variable → caused ReferenceError crash on payment creation. Fixed to use `body.status`.
+- Created validation utility (src/lib/validation.ts) with: sanitizeHtml, stripHtml, sanitizeLikePattern, isValidEmail, isValidPhone, isValidPositiveNumber, isValidLength, isValidUrl, isValidDate, validateFields, sanitizeFields
+- Added input validation to auth registration: email format validation, phone format validation, password min 8 chars (was 6), text input sanitization via stripHtml
+- Added input validation to PG creation: numeric field validation (price, securityDeposit), text sanitization (name, description, address, city)
+- Fixed amenities LIKE injection in PG search: now uses sanitizeLikePattern()
+- Added welcome email on user registration (sendWelcomeEmail called after insert)
+- Updated middleware.ts with comprehensive security:
+  - Added Content-Security-Policy (CSP) header
+  - Added Strict-Transport-Security (HSTS) header (production only)
+  - Added Permissions-Policy header
+  - Removed x-admin-secret from CORS Access-Control-Allow-Headers
+  - Added rate limiting for /api/contact (5/min), /api/ai-chat (20/min), /api/setup (3/min)
+  - Blocks /api/setup and /api/seed endpoints in production (returns 403)
+  - Extended middleware matcher to apply security headers to ALL routes (not just /api)
+- Created pagination utility (src/lib/pagination.ts) with getPaginationParams, createPaginatedResponse, applyPaginationRange
+- Added pagination to 3 key list endpoints: bookings, payments, complaints (with page/limit params, total count, hasMore)
+- Added captureException (Sentry) to 13 remaining API routes: rooms, beds, tenants, vendors, workers, notifications, activity-log, contact, reviews, coupons, analytics, reports, rent-records
+- Expanded .env.example with all 20+ environment variables, grouped by feature, with comments explaining required vs optional
+
+Stage Summary:
+- URGENT payment bug fixed (was crashing on POST)
+- Input validation + sanitization added to auth and PG routes
+- Full security headers (CSP + HSTS + Permissions-Policy)
+- Rate limiting now covers contact, AI chat, and setup endpoints
+- Setup/seed endpoints blocked in production
+- Pagination added to bookings, payments, complaints
+- 100% Sentry coverage across all API routes
+- .env.example fully documented
+- P4-8 (Cookie/Session Security) deferred — requires frontend changes (localStorage → HttpOnly cookie migration)

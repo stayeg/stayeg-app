@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(data || []);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/reviews' });
     console.error('GET /api/reviews error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
@@ -83,6 +85,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, review: data }, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/reviews' });
     console.error('POST /api/reviews error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
@@ -128,6 +131,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true, review: data });
   } catch (error) {
+    captureException(error, { endpoint: 'PATCH /api/reviews' });
     console.error('PATCH /api/reviews error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }

@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
@@ -66,6 +67,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(records || []);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/rent-records' });
     console.error('GET /api/rent-records error:', error);
     return NextResponse.json({ error: 'Failed to fetch rent records' }, { status: 500 });
   }
@@ -111,6 +113,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(record, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/rent-records' });
     console.error('POST /api/rent-records error:', error);
     return NextResponse.json({ error: 'Failed to create rent record' }, { status: 500 });
   }
@@ -181,6 +184,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json(record);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/rent-records' });
     console.error('PUT /api/rent-records error:', error);
     return NextResponse.json({ error: 'Failed to update rent record' }, { status: 500 });
   }

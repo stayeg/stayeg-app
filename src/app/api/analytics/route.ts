@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
@@ -266,6 +267,7 @@ export async function GET(request: NextRequest) {
       rentDue,
     });
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/analytics' });
     console.error('GET /api/analytics error:', error);
     return NextResponse.json({ error: 'Failed to fetch analytics' }, { status: 500 });
   }

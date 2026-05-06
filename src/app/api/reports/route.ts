@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, message: 'Report submitted' }, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/reports' });
     console.error('Error submitting report:', error);
     return NextResponse.json({ error: 'Failed to submit report' }, { status: 500 });
   }

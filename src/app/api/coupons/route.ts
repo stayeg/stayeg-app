@@ -6,6 +6,7 @@
  * POST /api/coupons             — Apply coupon to booking (track usage)
  */
 
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
@@ -92,6 +93,7 @@ export async function GET(request: NextRequest) {
       }))
     );
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/coupons' });
     console.error('GET /api/coupons error:', error);
     return NextResponse.json({ error: 'Failed to fetch coupons' }, { status: 500 });
   }
@@ -174,6 +176,7 @@ export async function POST(request: NextRequest) {
       final_amount: Math.round((amount - discountAmount) * 100) / 100,
     });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/coupons' });
     console.error('POST /api/coupons error:', error);
     return NextResponse.json({ error: 'Failed to apply coupon' }, { status: 500 });
   }

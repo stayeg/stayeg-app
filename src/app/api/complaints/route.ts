@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { captureException } from '@/lib/sentry-server';
+import { getPaginationParams, applyPaginationRange, createPaginatedResponse } from '@/lib/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -21,20 +22,25 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('complaints')
-      .select('*, pg:pgs(id,name), user:users(id,name,email,phone,avatar)')
+      .select('*, pg:pgs(id,name), user:users(id,name,email,phone,avatar)', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (userId) query = query.eq('user_id', userId);
     if (pgId) query = query.eq('pg_id', pgId);
     if (status) query = query.eq('status', status);
 
-    const { data: complaints, error } = await query;
+    // Apply pagination
+    const pagination = getPaginationParams(request);
+    const { from, to } = applyPaginationRange(pagination);
+    query = query.range(from, to);
+
+    const { data: complaints, count, error } = await query;
     if (error) {
       console.error('Error fetching complaints:', error.message);
       return NextResponse.json({ error: 'Failed to fetch complaints' }, { status: 500 });
     }
 
-    return NextResponse.json(complaints || []);
+    return NextResponse.json(createPaginatedResponse(complaints || [], count || 0, pagination));
   } catch (error) {
     captureException(error, { endpoint: 'GET /api/complaints' });
     console.error('Error fetching complaints:', error);

@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
@@ -44,6 +45,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(logs || []);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/activity-log' });
     console.error('Error fetching activity logs:', error);
     return NextResponse.json(
       { error: 'Failed to fetch activity logs' },
@@ -90,6 +92,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(log, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/activity-log' });
     console.error('Error creating activity log:', error);
     return NextResponse.json(
       { error: 'Failed to create activity log' },

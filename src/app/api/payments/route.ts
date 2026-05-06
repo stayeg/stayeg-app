@@ -1,6 +1,8 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
+import { captureException } from '@/lib/sentry-server';
+import { getPaginationParams, applyPaginationRange, createPaginatedResponse } from '@/lib/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,21 +22,27 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('payments')
-      .select('*, pg:pgs(id,name), user:users(id,name,email,phone,avatar)')
+      .select('*, pg:pgs(id,name), user:users(id,name,email,phone,avatar)', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (userId) query = query.eq('user_id', userId);
     if (pgId) query = query.eq('pg_id', pgId);
     if (status) query = query.eq('status', status);
 
-    const { data: payments, error } = await query;
+    // Apply pagination
+    const pagination = getPaginationParams(request);
+    const { from, to } = applyPaginationRange(pagination);
+    query = query.range(from, to);
+
+    const { data: payments, count, error } = await query;
     if (error) {
       console.error('Error fetching payments:', error.message);
       return NextResponse.json({ error: 'Failed to fetch payments' }, { status: 500 });
     }
 
-    return NextResponse.json(payments || []);
+    return NextResponse.json(createPaginatedResponse(payments || [], count || 0, pagination));
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/payments' });
     console.error('Error fetching payments:', error);
     return NextResponse.json({ error: 'Failed to fetch payments' }, { status: 500 });
   }
@@ -51,8 +59,9 @@ export async function POST(request: NextRequest) {
 
     // TENANT can only create payments for themselves
     const paymentUserId = authResult.user.role === 'TENANT' ? authResult.user.id : userId;
-    // Tenants cannot set status to COMPLETED directly
-    const paymentStatus = (authResult.user.role === 'TENANT') ? 'PENDING' : (status || 'COMPLETED');
+    // BUG FIX: Tenants cannot set status to COMPLETED directly — use body.status for admins
+    // Previously referenced undefined `status` variable from GET scope, causing ReferenceError
+    const paymentStatus = (authResult.user.role === 'TENANT') ? 'PENDING' : (body.status || 'COMPLETED');
 
     if (!paymentUserId || !pgId || !amount) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -76,6 +85,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(payment, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/payments' });
     console.error('Error creating payment:', error);
     return NextResponse.json({ error: 'Failed to create payment' }, { status: 500 });
   }
@@ -125,6 +135,7 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(payment);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/payments' });
     console.error('Error updating payment:', error);
     return NextResponse.json({ error: 'Failed to update payment' }, { status: 500 });
   }

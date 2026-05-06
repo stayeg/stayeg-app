@@ -1,3 +1,4 @@
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -27,6 +28,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, message: 'Contact form submitted' }, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/contact' });
     console.error('Error submitting contact form:', error);
     return NextResponse.json({ error: 'Failed to submit contact form' }, { status: 500 });
   }

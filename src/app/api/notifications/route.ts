@@ -6,6 +6,7 @@
  * PUT  /api/notifications         — Mark as read
  */
 
+import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
@@ -48,6 +49,7 @@ export async function GET(request: NextRequest) {
       unread_count: unreadCount || 0,
     });
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/notifications' });
     console.error('GET /api/notifications error:', error);
     return NextResponse.json({ error: 'Failed to fetch notifications' }, { status: 500 });
   }
@@ -83,6 +85,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(notification, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/notifications' });
     console.error('POST /api/notifications error:', error);
     return NextResponse.json({ error: 'Failed to create notification' }, { status: 500 });
   }
@@ -122,6 +125,7 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json({ success: true });
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/notifications' });
     console.error('PUT /api/notifications error:', error);
     return NextResponse.json({ error: 'Failed to update notification' }, { status: 500 });
   }

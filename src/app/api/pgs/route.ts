@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { captureException } from '@/lib/sentry-server';
+import { sanitizeLikePattern, stripHtml, isValidPositiveNumber } from '@/lib/validation';
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,9 +44,9 @@ export async function GET(request: NextRequest) {
       query = query.lte('price', maxPrice);
     }
 
-    // Amenities filter: chain .like for each amenity
+    // Amenities filter: chain .like for each amenity (sanitize wildcards)
     for (const a of amenities) {
-      query = query.like('amenities', `%${a}%`);
+      query = query.like('amenities', `%${sanitizeLikePattern(a)}%`);
     }
 
     // Sorting
@@ -97,6 +98,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'name and address are required' }, { status: 400 });
     }
 
+    // Validate numeric fields
+    if (price !== undefined && !isValidPositiveNumber(price, true)) {
+      return NextResponse.json({ error: 'Price must be a positive number' }, { status: 400 });
+    }
+    if (securityDeposit !== undefined && !isValidPositiveNumber(securityDeposit, true)) {
+      return NextResponse.json({ error: 'Security deposit must be a positive number' }, { status: 400 });
+    }
+
+    // Sanitize text inputs
+    const sanitizedName = stripHtml(String(name).trim()).slice(0, 200);
+    const sanitizedDescription = description ? stripHtml(String(description).trim()).slice(0, 2000) : null;
+    const sanitizedAddress = stripHtml(String(address).trim()).slice(0, 500);
+    const sanitizedCity = city ? stripHtml(String(city).trim()).slice(0, 50) : 'Bangalore';
+
     // SECURITY FIX (v3): Always use authenticated user's ID as owner_id
     // Owners can no longer create PGs under a different owner's ID
     const ownerId = authResult.user.id;
@@ -104,11 +119,11 @@ export async function POST(request: NextRequest) {
     const { data: pg, error } = await supabaseAdmin
       .from('pgs')
       .insert({
-        name,
+        name: sanitizedName,
         owner_id: ownerId,
-        description,
-        address,
-        city: city || 'Bangalore',
+        description: sanitizedDescription,
+        address: sanitizedAddress,
+        city: sanitizedCity,
         gender: gender || 'UNISEX',
         price: price || 0,
         security_deposit: securityDeposit || 0,
