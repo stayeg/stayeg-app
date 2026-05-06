@@ -16,9 +16,9 @@
 --   7. Auto activity-log triggers
 --   8. Additional performance indexes
 --   9. Atomic RPC functions
---  10. Dashboard views
---  11. Monetary field migration (DOUBLE PRECISION -> NUMERIC)
---  12. Soft delete support
+--  10. Soft delete support (MUST come before dashboard views)
+--  11. Dashboard views (depends on deleted_at columns)
+--  12. Monetary field migration (DOUBLE PRECISION -> NUMERIC)
 --  13. DB validation functions
 -- =============================================================
 
@@ -107,13 +107,6 @@ $$;
 -- PART 3: Additional Data Integrity Constraints
 -- =============================================================
 -- Only adding constraints NOT already in the PRODUCTION SETUP.
--- Production setup already has: bookings.status NOT NULL,
--- payments.type NOT NULL, payments.status NOT NULL,
--- notifications.is_read NOT NULL DEFAULT FALSE,
--- notifications.type NOT NULL DEFAULT 'INFO',
--- workers.status CHECK, beds.status CHECK (with RESERVED),
--- complaints.category CHECK (with FOOD, OTHER),
--- payments.type CHECK (with DEPOSIT, MAINTENANCE, PENALTY, REFUND)
 
 -- 3a. Price/amount validation (production setup doesn't have these)
 ALTER TABLE pgs ADD CONSTRAINT pgs_price_positive CHECK (price >= 0);
@@ -756,10 +749,29 @@ $$;
 
 
 -- =============================================================
--- PART 10: Dashboard Views
+-- PART 10: Soft Delete Support (MUST come before Dashboard Views)
 -- =============================================================
 
--- 10a. Owner dashboard materialized view
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE pgs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_users_active ON users(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pgs_active ON pgs(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_bookings_active ON bookings(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_payments_active ON payments(id) WHERE deleted_at IS NULL;
+
+
+-- =============================================================
+-- PART 11: Dashboard Views (depends on deleted_at columns)
+-- =============================================================
+
+-- 11a. Owner dashboard materialized view
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_owner_dashboard AS
 SELECT
   p.owner_id,
@@ -794,7 +806,7 @@ GROUP BY p.owner_id, p.id, p.name, p.city, p.status;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_owner_dashboard_pg ON mv_owner_dashboard(pg_id);
 
--- 10b. Tenant dashboard view (live)
+-- 11b. Tenant dashboard view (live)
 CREATE OR REPLACE VIEW v_tenant_dashboard AS
 SELECT
   u.id AS user_id, u.name AS tenant_name, u.email,
@@ -814,7 +826,7 @@ WHERE u.deleted_at IS NULL
 GROUP BY u.id, u.name, u.email, bk.id, bk.status, bk.check_in_date,
          pg.id, pg.name, pg.address, pg.city, rm.room_code, rm.room_type, bd.bed_number, bd.price;
 
--- 10c. Payment reconciliation view
+-- 11c. Payment reconciliation view
 CREATE OR REPLACE VIEW v_payment_reconciliation AS
 SELECT
   p.id, p.amount, p.status, p.type AS payment_type, p.method,
@@ -829,7 +841,7 @@ ORDER BY p.created_at DESC;
 
 
 -- =============================================================
--- PART 11: Monetary Field Migration (DOUBLE PRECISION -> NUMERIC)
+-- PART 12: Monetary Field Migration (DOUBLE PRECISION -> NUMERIC)
 -- =============================================================
 -- Safe: NUMERIC holds all DOUBLE PRECISION values. Run during low traffic.
 
@@ -883,25 +895,6 @@ BEGIN
   );
 END;
 $$;
-
-
--- =============================================================
--- PART 12: Soft Delete Support
--- =============================================================
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE pgs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE payments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE reviews ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE complaints ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE vendors ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE workers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-
-CREATE INDEX IF NOT EXISTS idx_users_active ON users(id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_pgs_active ON pgs(id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_bookings_active ON bookings(id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_payments_active ON payments(id) WHERE deleted_at IS NULL;
 
 
 -- =============================================================
