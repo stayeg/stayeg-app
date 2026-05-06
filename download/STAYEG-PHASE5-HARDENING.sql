@@ -1,28 +1,128 @@
 -- =============================================================
--- StayEg — Phase 5: Database Hardening Migration
+-- StayEg — Phase 5: Database Hardening Migration (IDEMPOTENT)
 -- =============================================================
 -- Run this in Supabase Dashboard > SQL Editor > New Query
 -- AFTER running PRODUCTION SETUP and Phase 2 Security.
 --
--- CRITICAL ORDERING:
---   1. Missing tables          (Parts 1-2)
---   2. Constraints             (Part 3)
---   3. Cross-table triggers    (Part 4)
---   4. Auto-release bed        (Part 5)
---   5. Auto-notifications      (Part 6)
---   6. Activity-log triggers   (Part 7)
---   7. Performance indexes     (Part 8)
---   8. Atomic RPCs             (Part 9)
---   9. Soft delete columns     (Part 10)  ← BEFORE views
---  10. Monetary type migration (Part 11)  ← BEFORE views (fixes the ALTER error)
---  11. Dashboard views         (Part 12)  ← AFTER soft delete + monetary
---  12. Validation functions    (Part 13)
+-- This version is FULLY IDEMPOTENT — you can run it as many
+-- times as you want without errors, even after partial failures.
+--
+-- EXECUTION ORDER:
+--   STEP 0:  Drop conflicting views/matviews/functions
+--   STEP 1:  Create missing tables (IF NOT EXISTS)
+--   STEP 2:  RLS enable + policies (DROP IF EXISTS first)
+--   STEP 3:  Constraints (EXCEPTION WHEN duplicate_object)
+--   STEP 4:  Triggers (DROP IF EXISTS first)
+--   STEP 5:  Performance indexes (IF NOT EXISTS)
+--   STEP 6:  Soft delete columns (ADD COLUMN IF NOT EXISTS)
+--   STEP 7:  Monetary type migration (views already dropped)
+--   STEP 8:  Dashboard views (AFTER soft delete + monetary)
+--   STEP 9:  Atomic RPC functions (DROP IF EXISTS first)
+--   STEP 10: Validation helper functions (DROP IF EXISTS first)
 -- =============================================================
 
 
 -- =============================================================
--- PART 1: Create missing tables
+-- STEP 0: Drop ALL objects that could conflict
 -- =============================================================
+-- This MUST be first so that ALTER COLUMN TYPE and function
+-- recreation don't fail due to existing dependencies.
+-- We ONLY drop OUR objects, NOT system/extension functions.
+
+-- 0a. Drop dashboard views (they reference columns we'll ALTER)
+DROP VIEW IF EXISTS v_owner_dashboard CASCADE;
+DROP VIEW IF EXISTS v_tenant_dashboard CASCADE;
+DROP VIEW IF EXISTS v_payment_summary CASCADE;
+DROP VIEW IF EXISTS v_payment_reconciliation CASCADE;
+DROP VIEW IF EXISTS v_bed_availability CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mv_owner_dashboard CASCADE;
+
+-- 0b. Drop functions we will recreate (TARGETED — not blanket!)
+--     This avoids accidentally dropping pg_trgm's set_limit(real).
+DROP FUNCTION IF EXISTS release_bed_on_booking_close() CASCADE;
+DROP FUNCTION IF EXISTS occupy_bed_on_booking() CASCADE;
+DROP FUNCTION IF EXISTS auto_release_expired_beds() CASCADE;
+DROP FUNCTION IF EXISTS notify_owner_on_booking() CASCADE;
+DROP FUNCTION IF EXISTS notify_tenant_overdue_payment() CASCADE;
+DROP FUNCTION IF EXISTS notify_tenant_complaint_update() CASCADE;
+DROP FUNCTION IF EXISTS log_booking_activity() CASCADE;
+DROP FUNCTION IF EXISTS log_payment_activity() CASCADE;
+DROP FUNCTION IF EXISTS log_complaint_activity() CASCADE;
+DROP FUNCTION IF EXISTS record_payment_atomic(TEXT, TEXT, TEXT, DOUBLE PRECISION, TEXT, TEXT, TEXT, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS cancel_booking_atomic(TEXT, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS complete_booking_atomic(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS transfer_bed_atomic(TEXT, TEXT, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS apply_coupon_atomic(TEXT, TEXT, TEXT, NUMERIC) CASCADE;
+DROP FUNCTION IF EXISTS generate_monthly_rent(TEXT, DATE) CASCADE;
+DROP FUNCTION IF EXISTS validate_coupon(TEXT, TEXT, NUMERIC) CASCADE;
+DROP FUNCTION IF EXISTS get_pg_occupancy(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS get_tenant_payment_history(TEXT, INTEGER, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS is_valid_email(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS is_valid_indian_phone(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS is_valid_ifsc(TEXT) CASCADE;
+
+-- 0c. Drop triggers we will recreate
+DROP TRIGGER IF EXISTS tr_release_bed_on_close ON bookings;
+DROP TRIGGER IF EXISTS tr_occupy_bed_on_booking ON bookings;
+DROP TRIGGER IF EXISTS tr_notify_owner_booking ON bookings;
+DROP TRIGGER IF EXISTS tr_notify_overdue_payment ON payments;
+DROP TRIGGER IF EXISTS tr_notify_complaint_update ON complaints;
+DROP TRIGGER IF EXISTS tr_log_booking_activity ON bookings;
+DROP TRIGGER IF EXISTS tr_log_payment_activity ON payments;
+DROP TRIGGER IF EXISTS tr_log_complaint_activity ON complaints;
+DROP TRIGGER IF EXISTS tr_expenses_uat ON expenses;
+DROP TRIGGER IF EXISTS tr_maintenance_requests_uat ON maintenance_requests;
+DROP TRIGGER IF EXISTS tr_leave_notices_uat ON leave_notices;
+DROP TRIGGER IF EXISTS tr_reports_uat ON reports;
+DROP TRIGGER IF EXISTS tr_contact_submissions_uat ON contact_submissions;
+
+-- 0d. Drop policies we will recreate (for new Phase 5 tables only)
+DROP POLICY IF EXISTS "expense_categories_select_service" ON expense_categories;
+DROP POLICY IF EXISTS "expense_categories_insert_service" ON expense_categories;
+DROP POLICY IF EXISTS "expense_categories_update_service" ON expense_categories;
+DROP POLICY IF EXISTS "expense_categories_delete_service" ON expense_categories;
+DROP POLICY IF EXISTS "expenses_select_service" ON expenses;
+DROP POLICY IF EXISTS "expenses_insert_service" ON expenses;
+DROP POLICY IF EXISTS "expenses_update_service" ON expenses;
+DROP POLICY IF EXISTS "expenses_delete_service" ON expenses;
+DROP POLICY IF EXISTS "maintenance_requests_select_service" ON maintenance_requests;
+DROP POLICY IF EXISTS "maintenance_requests_insert_service" ON maintenance_requests;
+DROP POLICY IF EXISTS "maintenance_requests_update_service" ON maintenance_requests;
+DROP POLICY IF EXISTS "maintenance_requests_delete_service" ON maintenance_requests;
+DROP POLICY IF EXISTS "leave_notices_select_service" ON leave_notices;
+DROP POLICY IF EXISTS "leave_notices_insert_service" ON leave_notices;
+DROP POLICY IF EXISTS "leave_notices_update_service" ON leave_notices;
+DROP POLICY IF EXISTS "leave_notices_delete_service" ON leave_notices;
+DROP POLICY IF EXISTS "reports_select_service" ON reports;
+DROP POLICY IF EXISTS "reports_insert_service" ON reports;
+DROP POLICY IF EXISTS "reports_update_service" ON reports;
+DROP POLICY IF EXISTS "reports_delete_service" ON reports;
+DROP POLICY IF EXISTS "contact_submissions_select_service" ON contact_submissions;
+DROP POLICY IF EXISTS "contact_submissions_insert_service" ON contact_submissions;
+DROP POLICY IF EXISTS "contact_submissions_update_service" ON contact_submissions;
+DROP POLICY IF EXISTS "contact_submissions_delete_service" ON contact_submissions;
+DROP POLICY IF EXISTS "review_helpful_votes_select_service" ON review_helpful_votes;
+DROP POLICY IF EXISTS "review_helpful_votes_insert_service" ON review_helpful_votes;
+DROP POLICY IF EXISTS "review_helpful_votes_delete_service" ON review_helpful_votes;
+
+-- 0e. Drop constraints we will recreate (idempotent)
+DO $$ BEGIN
+  ALTER TABLE payments DROP CONSTRAINT IF EXISTS chk_payments_amount_positive;
+  ALTER TABLE bookings DROP CONSTRAINT IF EXISTS chk_bookings_advance_nonneg;
+  ALTER TABLE pgs DROP CONSTRAINT IF EXISTS chk_pgs_price_nonneg;
+  ALTER TABLE pgs DROP CONSTRAINT IF EXISTS chk_pgs_deposit_nonneg;
+  ALTER TABLE reviews DROP CONSTRAINT IF EXISTS chk_reviews_comment_length;
+  ALTER TABLE expenses DROP CONSTRAINT IF EXISTS chk_expenses_amount_positive;
+  ALTER TABLE leave_notices DROP CONSTRAINT IF EXISTS chk_leave_intended_after_notice;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+
+-- =============================================================
+-- STEP 1: Create missing tables
+-- =============================================================
+-- All use IF NOT EXISTS so they're safe even if table already exists
+-- from a previous partial run.
 
 -- 1a. Expense Categories
 CREATE TABLE IF NOT EXISTS expense_categories (
@@ -79,15 +179,57 @@ CREATE TABLE IF NOT EXISTS leave_notices (
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 1e. Reports (admin reports table)
+CREATE TABLE IF NOT EXISTS reports (
+  id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  reporter_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  pg_id       TEXT REFERENCES pgs(id) ON DELETE SET NULL,
+  type        TEXT NOT NULL CHECK (type IN ('FRAUD', 'MAINTENANCE', 'NOISE', 'SAFETY', 'OTHER')),
+  title       TEXT NOT NULL,
+  description TEXT,
+  status      TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'INVESTIGATING', 'RESOLVED', 'DISMISSED')),
+  admin_note  TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 1f. Contact Submissions
+CREATE TABLE IF NOT EXISTS contact_submissions (
+  id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name       TEXT NOT NULL,
+  email      TEXT NOT NULL,
+  phone      TEXT,
+  subject    TEXT NOT NULL,
+  message    TEXT NOT NULL,
+  is_read    BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 1g. Review Helpful Votes
+CREATE TABLE IF NOT EXISTS review_helpful_votes (
+  id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  review_id  TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (review_id, user_id)
+);
+
 
 -- =============================================================
--- PART 2: RLS for new tables
+-- STEP 2: RLS for new tables + Policies
 -- =============================================================
+-- DROP POLICY IF EXISTS already done in STEP 0d above.
+-- We just create them now.
 
+-- Enable RLS (idempotent — running again is a no-op)
 ALTER TABLE expense_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE maintenance_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE leave_notices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contact_submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_helpful_votes ENABLE ROW LEVEL SECURITY;
 
 -- Expense Categories: service_role only
 CREATE POLICY "expense_categories_select_service" ON expense_categories FOR SELECT USING (auth.role() = 'service_role');
@@ -113,44 +255,73 @@ CREATE POLICY "leave_notices_insert_service" ON leave_notices FOR INSERT WITH CH
 CREATE POLICY "leave_notices_update_service" ON leave_notices FOR UPDATE USING (auth.role() = 'service_role');
 CREATE POLICY "leave_notices_delete_service" ON leave_notices FOR DELETE USING (auth.role() = 'service_role');
 
--- Triggers for updated_at on new tables
-CREATE TRIGGER tr_expenses_uat BEFORE UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER tr_maintenance_requests_uat BEFORE UPDATE ON maintenance_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER tr_leave_notices_uat BEFORE UPDATE ON leave_notices FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+-- Reports: service_role only
+CREATE POLICY "reports_select_service" ON reports FOR SELECT USING (auth.role() = 'service_role');
+CREATE POLICY "reports_insert_service" ON reports FOR INSERT WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY "reports_update_service" ON reports FOR UPDATE USING (auth.role() = 'service_role');
+CREATE POLICY "reports_delete_service" ON reports FOR DELETE USING (auth.role() = 'service_role');
+
+-- Contact Submissions: service_role only
+CREATE POLICY "contact_submissions_select_service" ON contact_submissions FOR SELECT USING (auth.role() = 'service_role');
+CREATE POLICY "contact_submissions_insert_service" ON contact_submissions FOR INSERT WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY "contact_submissions_update_service" ON contact_submissions FOR UPDATE USING (auth.role() = 'service_role');
+CREATE POLICY "contact_submissions_delete_service" ON contact_submissions FOR DELETE USING (auth.role() = 'service_role');
+
+-- Review Helpful Votes: service_role only (insert + delete, no update)
+CREATE POLICY "review_helpful_votes_select_service" ON review_helpful_votes FOR SELECT USING (auth.role() = 'service_role');
+CREATE POLICY "review_helpful_votes_insert_service" ON review_helpful_votes FOR INSERT WITH CHECK (auth.role() = 'service_role');
+CREATE POLICY "review_helpful_votes_delete_service" ON review_helpful_votes FOR DELETE USING (auth.role() = 'service_role');
 
 
 -- =============================================================
--- PART 3: Additional constraints
+-- STEP 3: Additional constraints (idempotent via exception handling)
 -- =============================================================
+-- We dropped them in STEP 0e already, so now we just add them.
+-- Using DO $$ blocks with EXCEPTION to handle "already exists" from
+-- any scenario where the drop didn't work.
 
--- Ensure bookings have a check-in date in the past or today (no future-only constraint, just NOT NULL)
--- Already set in table definition: check_in_date TIMESTAMPTZ NOT NULL
+DO $$ BEGIN
+  ALTER TABLE payments ADD CONSTRAINT chk_payments_amount_positive CHECK (amount > 0);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- Ensure payment amounts are positive
-ALTER TABLE payments ADD CONSTRAINT chk_payments_amount_positive CHECK (amount > 0);
+DO $$ BEGIN
+  ALTER TABLE bookings ADD CONSTRAINT chk_bookings_advance_nonneg CHECK (advance_paid >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- Ensure booking advance is non-negative
-ALTER TABLE bookings ADD CONSTRAINT chk_bookings_advance_nonneg CHECK (advance_paid >= 0);
+DO $$ BEGIN
+  ALTER TABLE pgs ADD CONSTRAINT chk_pgs_price_nonneg CHECK (price >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- Ensure PG price is non-negative
-ALTER TABLE pgs ADD CONSTRAINT chk_pgs_price_nonneg CHECK (price >= 0);
-ALTER TABLE pgs ADD CONSTRAINT chk_pgs_deposit_nonneg CHECK (security_deposit >= 0);
+DO $$ BEGIN
+  ALTER TABLE pgs ADD CONSTRAINT chk_pgs_deposit_nonneg CHECK (security_deposit >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- Ensure review ratings are valid (already in table, but add comment constraint)
-ALTER TABLE reviews ADD CONSTRAINT chk_reviews_comment_length CHECK (length(comment) <= 2000);
+DO $$ BEGIN
+  ALTER TABLE reviews ADD CONSTRAINT chk_reviews_comment_length CHECK (length(comment) <= 2000);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- Ensure expense amounts are positive
-ALTER TABLE expenses ADD CONSTRAINT chk_expenses_amount_positive CHECK (amount > 0);
+DO $$ BEGIN
+  ALTER TABLE expenses ADD CONSTRAINT chk_expenses_amount_positive CHECK (amount > 0);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- Ensure leave notice dates make sense
-ALTER TABLE leave_notices ADD CONSTRAINT chk_leave_intended_after_notice CHECK (intended_leave >= notice_date);
+DO $$ BEGIN
+  ALTER TABLE leave_notices ADD CONSTRAINT chk_leave_intended_after_notice CHECK (intended_leave >= notice_date);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 
 -- =============================================================
--- PART 4: Cross-table triggers
+-- STEP 4: Triggers
 -- =============================================================
+-- DROP TRIGGER IF EXISTS already done in STEP 0c above.
 
--- 4a. When a booking status changes to COMPLETED or CANCELLED, release the bed
+-- 4a. Release bed when booking closes
 CREATE OR REPLACE FUNCTION release_bed_on_booking_close()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -162,7 +333,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_release_bed_on_close ON bookings;
 CREATE TRIGGER tr_release_bed_on_close
   AFTER UPDATE ON bookings
   FOR EACH ROW
@@ -170,7 +340,7 @@ CREATE TRIGGER tr_release_bed_on_close
   EXECUTE FUNCTION release_bed_on_booking_close();
 
 
--- 4b. When a new booking is created, ensure bed is marked OCCUPIED
+-- 4b. Mark bed as OCCUPIED when booking is created
 CREATE OR REPLACE FUNCTION occupy_bed_on_booking()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -181,17 +351,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_occupy_bed_on_booking ON bookings;
 CREATE TRIGGER tr_occupy_bed_on_booking
   AFTER INSERT ON bookings
   FOR EACH ROW
   EXECUTE FUNCTION occupy_bed_on_booking();
 
 
--- =============================================================
--- PART 5: Auto-release expired reserved beds
--- =============================================================
-
+-- 4c. Auto-release expired reserved beds
 CREATE OR REPLACE FUNCTION auto_release_expired_beds()
 RETURNS void AS $$
 BEGIN
@@ -207,11 +373,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- =============================================================
--- PART 6: Auto-notification triggers
--- =============================================================
-
--- 6a. Notify owner when a new booking is created
+-- 4d. Notify owner on new booking
 CREATE OR REPLACE FUNCTION notify_owner_on_booking()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -233,14 +395,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_notify_owner_booking ON bookings;
 CREATE TRIGGER tr_notify_owner_booking
   AFTER INSERT ON bookings
   FOR EACH ROW
   EXECUTE FUNCTION notify_owner_on_booking();
 
 
--- 6b. Notify tenant when payment is overdue (checked on payment update)
+-- 4e. Notify tenant on overdue payment
 CREATE OR REPLACE FUNCTION notify_tenant_overdue_payment()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -258,7 +419,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_notify_overdue_payment ON payments;
 CREATE TRIGGER tr_notify_overdue_payment
   AFTER UPDATE ON payments
   FOR EACH ROW
@@ -266,7 +426,7 @@ CREATE TRIGGER tr_notify_overdue_payment
   EXECUTE FUNCTION notify_tenant_overdue_payment();
 
 
--- 6c. Notify tenant on complaint status change
+-- 4f. Notify tenant on complaint status change
 CREATE OR REPLACE FUNCTION notify_tenant_complaint_update()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -284,18 +444,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_notify_complaint_update ON complaints;
 CREATE TRIGGER tr_notify_complaint_update
   AFTER UPDATE ON complaints
   FOR EACH ROW
   EXECUTE FUNCTION notify_tenant_complaint_update();
 
 
--- =============================================================
--- PART 7: Activity-log triggers
--- =============================================================
-
--- 7a. Log booking status changes
+-- 4g. Log booking status changes
 CREATE OR REPLACE FUNCTION log_booking_activity()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -316,7 +471,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_log_booking_activity ON bookings;
 CREATE TRIGGER tr_log_booking_activity
   AFTER UPDATE ON bookings
   FOR EACH ROW
@@ -324,7 +478,7 @@ CREATE TRIGGER tr_log_booking_activity
   EXECUTE FUNCTION log_booking_activity();
 
 
--- 7b. Log payment completions
+-- 4h. Log payment completions
 CREATE OR REPLACE FUNCTION log_payment_activity()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -347,7 +501,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_log_payment_activity ON payments;
 CREATE TRIGGER tr_log_payment_activity
   AFTER UPDATE ON payments
   FOR EACH ROW
@@ -355,7 +508,7 @@ CREATE TRIGGER tr_log_payment_activity
   EXECUTE FUNCTION log_payment_activity();
 
 
--- 7c. Log new complaints
+-- 4i. Log new complaints
 CREATE OR REPLACE FUNCTION log_complaint_activity()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -376,15 +529,22 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_log_complaint_activity ON complaints;
 CREATE TRIGGER tr_log_complaint_activity
   AFTER INSERT ON complaints
   FOR EACH ROW
   EXECUTE FUNCTION log_complaint_activity();
 
 
+-- 4j. updated_at triggers for new tables
+CREATE TRIGGER tr_expenses_uat BEFORE UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER tr_maintenance_requests_uat BEFORE UPDATE ON maintenance_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER tr_leave_notices_uat BEFORE UPDATE ON leave_notices FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER tr_reports_uat BEFORE UPDATE ON reports FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER tr_contact_submissions_uat BEFORE UPDATE ON contact_submissions FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
 -- =============================================================
--- PART 8: Performance indexes (additional)
+-- STEP 5: Performance indexes
 -- =============================================================
 
 -- Compound indexes for common query patterns
@@ -410,6 +570,20 @@ CREATE INDEX IF NOT EXISTS idx_leave_notices_user ON leave_notices(user_id);
 CREATE INDEX IF NOT EXISTS idx_leave_notices_pg ON leave_notices(pg_id);
 CREATE INDEX IF NOT EXISTS idx_leave_notices_status ON leave_notices(status);
 
+-- Reports indexes
+CREATE INDEX IF NOT EXISTS idx_reports_pg ON reports(pg_id);
+CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+CREATE INDEX IF NOT EXISTS idx_reports_type ON reports(type);
+
+-- Contact submissions indexes
+CREATE INDEX IF NOT EXISTS idx_contact_submissions_read ON contact_submissions(is_read) WHERE is_read = FALSE;
+CREATE INDEX IF NOT EXISTS idx_contact_submissions_created ON contact_submissions(created_at DESC);
+
+-- Review helpful votes indexes
+CREATE INDEX IF NOT EXISTS idx_review_helpful_votes_review ON review_helpful_votes(review_id);
+CREATE INDEX IF NOT EXISTS idx_review_helpful_votes_user ON review_helpful_votes(user_id);
+
 -- Activity log compound indexes
 CREATE INDEX IF NOT EXISTS idx_activity_log_owner_pg ON activity_log(owner_id, pg_id);
 CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity_type, entity_id);
@@ -418,17 +592,199 @@ CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at D
 -- Notifications compound index for "unread count" queries
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, is_read) WHERE is_read = FALSE;
 
+-- Full-text search index using pg_trgm (for PG name search)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_pgs_name_trgm ON pgs USING gin(name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_pgs_address_trgm ON pgs USING gin(address gin_trgm_ops);
+
 
 -- =============================================================
--- PART 9: Atomic RPC functions
+-- STEP 6: Soft delete columns (BEFORE monetary migration & views)
 -- =============================================================
+-- Dashboard views will reference these columns, so they MUST exist
+-- before the views are created.
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE pgs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE beds ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE complaints ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE maintenance_requests ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE leave_notices ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- Indexes for soft delete queries
+CREATE INDEX IF NOT EXISTS idx_users_deleted ON users(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pgs_deleted ON pgs(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bookings_deleted ON bookings(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_payments_deleted ON payments(deleted_at) WHERE deleted_at IS NOT NULL;
+
+
+-- =============================================================
+-- STEP 7: Monetary type migration (AFTER dropping views)
+-- =============================================================
+-- IMPORTANT: Views were dropped in STEP 0a, so ALTER COLUMN TYPE
+-- will NOT fail with "cannot alter type of a column used by a view".
+-- The views will be recreated in STEP 8 with the new NUMERIC types.
+
+ALTER TABLE pgs ALTER COLUMN price TYPE NUMERIC(12,2);
+ALTER TABLE pgs ALTER COLUMN security_deposit TYPE NUMERIC(12,2);
+ALTER TABLE beds ALTER COLUMN price TYPE NUMERIC(12,2);
+ALTER TABLE bookings ALTER COLUMN advance_paid TYPE NUMERIC(12,2);
+ALTER TABLE payments ALTER COLUMN amount TYPE NUMERIC(12,2);
+ALTER TABLE expenses ALTER COLUMN amount TYPE NUMERIC(12,2);
+
+
+-- =============================================================
+-- STEP 8: Dashboard views (AFTER soft delete + monetary migration)
+-- =============================================================
+-- These views are created AFTER:
+--   - Soft delete columns exist (STEP 6)
+--   - Monetary columns are NUMERIC(12,2) (STEP 7)
+--   - All old views were dropped (STEP 0a)
+-- so there are NO dependency conflicts.
+
+-- 8a. Owner dashboard view
+CREATE OR REPLACE VIEW v_owner_dashboard AS
+SELECT
+  p.id AS pg_id,
+  p.name AS pg_name,
+  p.city,
+  p.status AS pg_status,
+  p.deleted_at AS pg_deleted_at,
+  COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'ACTIVE') AS active_tenants,
+  COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'PENDING') AS pending_bookings,
+  COUNT(DISTINCT bed.id) FILTER (WHERE bed.status = 'AVAILABLE') AS available_beds,
+  COUNT(DISTINCT bed.id) FILTER (WHERE bed.status = 'OCCUPIED') AS occupied_beds,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.paid_date >= date_trunc('month', NOW())), 0) AS revenue_this_month,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING'), 0) AS pending_payments_total,
+  COUNT(DISTINCT comp.id) FILTER (WHERE comp.status IN ('OPEN', 'IN_PROGRESS')) AS open_complaints,
+  p.rating,
+  p.total_reviews
+FROM pgs p
+LEFT JOIN bookings b ON b.pg_id = p.id AND b.deleted_at IS NULL
+LEFT JOIN beds bed ON bed.room_id IN (SELECT id FROM rooms WHERE pg_id = p.id) AND bed.deleted_at IS NULL
+LEFT JOIN payments pay ON pay.pg_id = p.id AND pay.deleted_at IS NULL
+LEFT JOIN complaints comp ON comp.pg_id = p.id AND comp.deleted_at IS NULL
+WHERE p.deleted_at IS NULL
+GROUP BY p.id, p.name, p.city, p.status, p.deleted_at, p.rating, p.total_reviews;
+
+
+-- 8b. Tenant dashboard view
+CREATE OR REPLACE VIEW v_tenant_dashboard AS
+SELECT
+  u.id AS user_id,
+  u.name AS tenant_name,
+  b.id AS booking_id,
+  b.status AS booking_status,
+  b.check_in_date,
+  b.deleted_at AS booking_deleted_at,
+  p.id AS pg_id,
+  p.name AS pg_name,
+  p.address,
+  p.city,
+  p.deleted_at AS pg_deleted_at,
+  bed.id AS bed_id,
+  COALESCE(bed.price, p.price) AS monthly_rent,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING'), 0) AS outstanding_amount,
+  COUNT(pay.id) FILTER (WHERE pay.status = 'PENDING') AS pending_payments_count,
+  COUNT(comp.id) FILTER (WHERE comp.status IN ('OPEN', 'IN_PROGRESS')) AS open_complaints_count
+FROM users u
+LEFT JOIN bookings b ON b.user_id = u.id AND b.status IN ('PENDING', 'CONFIRMED', 'ACTIVE') AND b.deleted_at IS NULL
+LEFT JOIN pgs p ON p.id = b.pg_id AND p.deleted_at IS NULL
+LEFT JOIN beds bed ON bed.id = b.bed_id AND bed.deleted_at IS NULL
+LEFT JOIN payments pay ON pay.booking_id = b.id AND pay.deleted_at IS NULL
+LEFT JOIN complaints comp ON comp.user_id = u.id AND comp.pg_id = b.pg_id AND comp.deleted_at IS NULL
+WHERE u.deleted_at IS NULL AND u.role = 'TENANT'
+GROUP BY u.id, u.name, b.id, b.status, b.check_in_date, b.deleted_at,
+         p.id, p.name, p.address, p.city, p.deleted_at, bed.id, bed.price, p.price;
+
+
+-- 8c. Payment summary view
+CREATE OR REPLACE VIEW v_payment_summary AS
+SELECT
+  p.id AS pg_id,
+  p.name AS pg_name,
+  p.deleted_at AS pg_deleted_at,
+  COUNT(pay.id) AS total_payments,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED'), 0) AS total_collected,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING'), 0) AS total_pending,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.paid_date >= date_trunc('month', NOW())), 0) AS collected_this_month,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.paid_date >= date_trunc('year', NOW())), 0) AS collected_this_year,
+  COUNT(pay.id) FILTER (WHERE pay.status = 'PENDING' AND pay.due_date < NOW()) AS overdue_count,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING' AND pay.due_date < NOW()), 0) AS overdue_amount
+FROM pgs p
+LEFT JOIN payments pay ON pay.pg_id = p.id AND pay.deleted_at IS NULL
+WHERE p.deleted_at IS NULL
+GROUP BY p.id, p.name, p.deleted_at;
+
+
+-- 8d. Payment reconciliation view
+CREATE OR REPLACE VIEW v_payment_reconciliation AS
+SELECT
+  pay.id AS payment_id,
+  pay.amount,
+  pay.type AS payment_type,
+  pay.status AS payment_status,
+  pay.method,
+  pay.paid_date,
+  pay.due_date,
+  pay.razorpay_payment_id,
+  u.name AS tenant_name,
+  u.email AS tenant_email,
+  p.name AS pg_name,
+  b.id AS booking_id,
+  b.status AS booking_status
+FROM payments pay
+JOIN users u ON u.id = pay.user_id
+JOIN pgs p ON p.id = pay.pg_id
+LEFT JOIN bookings b ON b.id = pay.booking_id
+WHERE pay.deleted_at IS NULL
+ORDER BY pay.paid_date DESC NULLS LAST;
+
+
+-- 8e. Bed availability view
+CREATE OR REPLACE VIEW v_bed_availability AS
+SELECT
+  p.id AS pg_id,
+  p.name AS pg_name,
+  p.city,
+  p.gender,
+  p.deleted_at AS pg_deleted_at,
+  r.id AS room_id,
+  r.room_code,
+  r.room_type,
+  r.has_ac,
+  r.has_attached_bath,
+  bed.id AS bed_id,
+  bed.bed_number,
+  bed.status AS bed_status,
+  COALESCE(bed.price, p.price) AS bed_price
+FROM pgs p
+JOIN rooms r ON r.pg_id = p.id AND r.deleted_at IS NULL
+JOIN beds bed ON bed.room_id = r.id AND bed.deleted_at IS NULL
+WHERE p.deleted_at IS NULL AND p.status = 'APPROVED';
+
+
+-- =============================================================
+-- STEP 9: Atomic RPC functions
+-- =============================================================
+-- Functions were dropped in STEP 0b (targeted, NOT blanket).
+-- This avoids the pg_trgm set_limit(real) error.
 
 -- 9a. Record a payment (idempotent by razorpay_payment_id)
 CREATE OR REPLACE FUNCTION record_payment_atomic(
   p_user_id           TEXT,
   p_pg_id             TEXT,
   p_booking_id        TEXT,
-  p_amount            DOUBLE PRECISION,
+  p_amount            NUMERIC(12,2),
   p_type              TEXT,
   p_method            TEXT,
   p_razorpay_order_id TEXT DEFAULT NULL,
@@ -548,164 +904,196 @@ END;
 $$;
 
 
+-- 9d. Transfer tenant to a different bed
+CREATE OR REPLACE FUNCTION transfer_bed_atomic(
+  p_booking_id TEXT,
+  p_old_bed_id TEXT,
+  p_new_bed_id TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_booking RECORD;
+  v_new_bed_status TEXT;
+BEGIN
+  -- Lock and verify booking
+  SELECT * INTO v_booking FROM bookings WHERE id = p_booking_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'Booking not found', 'code', 'NOT_FOUND');
+  END IF;
+
+  IF v_booking.status NOT IN ('ACTIVE', 'CONFIRMED') THEN
+    RETURN jsonb_build_object('error', 'Booking must be active to transfer', 'code', 'INVALID_STATUS');
+  END IF;
+
+  IF v_booking.bed_id != p_old_bed_id THEN
+    RETURN jsonb_build_object('error', 'Booking is not for the specified bed', 'code', 'BED_MISMATCH');
+  END IF;
+
+  -- Lock and verify new bed availability
+  SELECT status INTO v_new_bed_status FROM beds WHERE id = p_new_bed_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'New bed not found', 'code', 'BED_NOT_FOUND');
+  END IF;
+
+  IF v_new_bed_status != 'AVAILABLE' THEN
+    RETURN jsonb_build_object('error', 'New bed is not available', 'code', 'BED_OCCUPIED');
+  END IF;
+
+  -- Perform transfer
+  UPDATE bookings SET bed_id = p_new_bed_id, updated_at = NOW() WHERE id = p_booking_id;
+  UPDATE beds SET status = 'AVAILABLE', updated_at = NOW() WHERE id = p_old_bed_id;
+  UPDATE beds SET status = 'OCCUPIED', updated_at = NOW() WHERE id = p_new_bed_id;
+
+  RETURN jsonb_build_object(
+    'bookingId', p_booking_id,
+    'oldBedId', p_old_bed_id,
+    'newBedId', p_new_bed_id,
+    'status', 'TRANSFERRED'
+  );
+END;
+$$;
+
+
+-- 9e. Apply coupon (atomic check + usage)
+CREATE OR REPLACE FUNCTION apply_coupon_atomic(
+  p_coupon_code TEXT,
+  p_user_id     TEXT,
+  p_booking_id  TEXT,
+  p_order_amount NUMERIC(12,2)
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_coupon RECORD;
+  v_usage_count INTEGER;
+  v_discount NUMERIC(12,2);
+  v_coupon_usage_id TEXT;
+BEGIN
+  -- Find the coupon
+  SELECT * INTO v_coupon FROM coupons WHERE code = p_coupon_code AND is_active = TRUE LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('valid', false, 'error', 'Invalid or inactive coupon');
+  END IF;
+
+  -- Check dates
+  IF v_coupon.valid_from > NOW() THEN
+    RETURN jsonb_build_object('valid', false, 'error', 'Coupon not yet active');
+  END IF;
+
+  IF v_coupon.valid_until IS NOT NULL AND v_coupon.valid_until < NOW() THEN
+    RETURN jsonb_build_object('valid', false, 'error', 'Coupon has expired');
+  END IF;
+
+  -- Check usage limit
+  IF v_coupon.usage_limit IS NOT NULL AND v_coupon.used_count >= v_coupon.usage_limit THEN
+    RETURN jsonb_build_object('valid', false, 'error', 'Usage limit reached');
+  END IF;
+
+  -- Check min order amount
+  IF v_coupon.min_order_amount IS NOT NULL AND p_order_amount < v_coupon.min_order_amount THEN
+    RETURN jsonb_build_object('valid', false, 'error', 'Minimum order amount is Rs. ' || v_coupon.min_order_amount);
+  END IF;
+
+  -- Check if user already used
+  SELECT COUNT(*) INTO v_usage_count FROM coupon_usages WHERE coupon_id = v_coupon.id AND user_id = p_user_id;
+
+  IF v_usage_count > 0 THEN
+    RETURN jsonb_build_object('valid', false, 'error', 'You have already used this coupon');
+  END IF;
+
+  -- Calculate discount
+  IF v_coupon.discount_type = 'PERCENTAGE' THEN
+    v_discount := LEAST(
+      (p_order_amount * v_coupon.discount_value / 100),
+      COALESCE(v_coupon.max_discount, p_order_amount)
+    );
+  ELSE
+    v_discount := LEAST(v_coupon.discount_value, p_order_amount);
+  END IF;
+
+  -- Record usage
+  INSERT INTO coupon_usages (coupon_id, user_id, booking_id, discount_amount)
+  VALUES (v_coupon.id, p_user_id, p_booking_id, v_discount)
+  RETURNING id INTO v_coupon_usage_id;
+
+  -- Increment used_count
+  UPDATE coupons SET used_count = used_count + 1 WHERE id = v_coupon.id;
+
+  RETURN jsonb_build_object(
+    'valid', true,
+    'coupon_id', v_coupon.id,
+    'discount', v_discount,
+    'final_amount', GREATEST(p_order_amount - v_discount, 0),
+    'usage_id', v_coupon_usage_id
+  );
+END;
+$$;
+
+
+-- 9f. Generate monthly rent payments for all active bookings
+CREATE OR REPLACE FUNCTION generate_monthly_rent(
+  p_pg_id  TEXT,
+  p_for_month DATE DEFAULT date_trunc('month', CURRENT_DATE)::date
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count INTEGER := 0;
+  v_booking RECORD;
+BEGIN
+  FOR v_booking IN
+    SELECT b.id, b.user_id, b.bed_id,
+           COALESCE(bed.price, p.price) AS rent_amount
+    FROM bookings b
+    JOIN pgs p ON p.id = b.pg_id
+    LEFT JOIN beds bed ON bed.id = b.bed_id
+    WHERE b.pg_id = p_pg_id
+      AND b.status = 'ACTIVE'
+      AND b.deleted_at IS NULL
+  LOOP
+    -- Check if payment already exists for this booking/month
+    IF NOT EXISTS (
+      SELECT 1 FROM payments
+      WHERE booking_id = v_booking.id
+        AND type = 'RENT'
+        AND due_date >= p_for_month
+        AND due_date < p_for_month + INTERVAL '1 month'
+    ) THEN
+      INSERT INTO payments (user_id, pg_id, booking_id, amount, type, status, due_date)
+      VALUES (
+        v_booking.user_id,
+        p_pg_id,
+        v_booking.id,
+        v_booking.rent_amount,
+        'RENT',
+        'PENDING',
+        p_for_month + INTERVAL '5 days'
+      );
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'pg_id', p_pg_id,
+    'for_month', p_for_month,
+    'payments_generated', v_count
+  );
+END;
+$$;
+
+
 -- =============================================================
--- PART 10: Soft delete columns (BEFORE dashboard views)
--- =============================================================
--- Dashboard views will reference these columns, so they MUST exist
--- before the views are created.
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE pgs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE rooms ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE beds ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE payments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE complaints ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE vendors ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE workers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE reviews ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE expenses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE maintenance_requests ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE leave_notices ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-
--- Indexes for soft delete queries
-CREATE INDEX IF NOT EXISTS idx_users_deleted ON users(deleted_at) WHERE deleted_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_pgs_deleted ON pgs(deleted_at) WHERE deleted_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_bookings_deleted ON bookings(deleted_at) WHERE deleted_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_payments_deleted ON payments(deleted_at) WHERE deleted_at IS NOT NULL;
-
-
--- =============================================================
--- PART 11: Monetary type migration (BEFORE dashboard views)
--- =============================================================
--- IMPORTANT: This MUST run before dashboard views are created,
--- because the views reference payments.amount and pgs.price.
--- PostgreSQL does not allow ALTER COLUMN TYPE on a column
--- that is referenced by a view.
-
--- Change monetary columns from DOUBLE PRECISION to NUMERIC(12,2)
--- for accurate financial calculations (no floating-point errors)
-
-ALTER TABLE pgs ALTER COLUMN price TYPE NUMERIC(12,2);
-ALTER TABLE pgs ALTER COLUMN security_deposit TYPE NUMERIC(12,2);
-ALTER TABLE beds ALTER COLUMN price TYPE NUMERIC(12,2);
-ALTER TABLE bookings ALTER COLUMN advance_paid TYPE NUMERIC(12,2);
-ALTER TABLE payments ALTER COLUMN amount TYPE NUMERIC(12,2);
-ALTER TABLE expenses ALTER COLUMN amount TYPE NUMERIC(12,2);
-
-
--- =============================================================
--- PART 12: Dashboard views (AFTER soft delete + monetary migration)
--- =============================================================
--- These views are created AFTER:
---   - Soft delete columns exist (Part 10)
---   - Monetary columns are NUMERIC(12,2) (Part 11)
--- so there are no dependency conflicts.
-
--- 12a. Owner dashboard view
-CREATE OR REPLACE VIEW v_owner_dashboard AS
-SELECT
-  p.id AS pg_id,
-  p.name AS pg_name,
-  p.city,
-  p.status AS pg_status,
-  p.deleted_at AS pg_deleted_at,
-  COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'ACTIVE') AS active_tenants,
-  COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'PENDING') AS pending_bookings,
-  COUNT(DISTINCT bed.id) FILTER (WHERE bed.status = 'AVAILABLE') AS available_beds,
-  COUNT(DISTINCT bed.id) FILTER (WHERE bed.status = 'OCCUPIED') AS occupied_beds,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.paid_date >= date_trunc('month', NOW())), 0) AS revenue_this_month,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING'), 0) AS pending_payments_total,
-  COUNT(DISTINCT comp.id) FILTER (WHERE comp.status IN ('OPEN', 'IN_PROGRESS')) AS open_complaints,
-  p.rating,
-  p.total_reviews
-FROM pgs p
-LEFT JOIN bookings b ON b.pg_id = p.id AND b.deleted_at IS NULL
-LEFT JOIN beds bed ON bed.room_id IN (SELECT id FROM rooms WHERE pg_id = p.id) AND bed.deleted_at IS NULL
-LEFT JOIN payments pay ON pay.pg_id = p.id AND pay.deleted_at IS NULL
-LEFT JOIN complaints comp ON comp.pg_id = p.id AND comp.deleted_at IS NULL
-WHERE p.deleted_at IS NULL
-GROUP BY p.id, p.name, p.city, p.status, p.deleted_at, p.rating, p.total_reviews;
-
-
--- 12b. Tenant dashboard view
-CREATE OR REPLACE VIEW v_tenant_dashboard AS
-SELECT
-  u.id AS user_id,
-  u.name AS tenant_name,
-  b.id AS booking_id,
-  b.status AS booking_status,
-  b.check_in_date,
-  b.deleted_at AS booking_deleted_at,
-  p.id AS pg_id,
-  p.name AS pg_name,
-  p.address,
-  p.city,
-  p.deleted_at AS pg_deleted_at,
-  bed.id AS bed_id,
-  COALESCE(bed.price, p.price) AS monthly_rent,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING'), 0) AS outstanding_amount,
-  COUNT(pay.id) FILTER (WHERE pay.status = 'PENDING') AS pending_payments_count,
-  COUNT(comp.id) FILTER (WHERE comp.status IN ('OPEN', 'IN_PROGRESS')) AS open_complaints_count
-FROM users u
-LEFT JOIN bookings b ON b.user_id = u.id AND b.status IN ('PENDING', 'CONFIRMED', 'ACTIVE') AND b.deleted_at IS NULL
-LEFT JOIN pgs p ON p.id = b.pg_id AND p.deleted_at IS NULL
-LEFT JOIN beds bed ON bed.id = b.bed_id AND bed.deleted_at IS NULL
-LEFT JOIN payments pay ON pay.booking_id = b.id AND pay.deleted_at IS NULL
-LEFT JOIN complaints comp ON comp.user_id = u.id AND comp.pg_id = b.pg_id AND comp.deleted_at IS NULL
-WHERE u.deleted_at IS NULL AND u.role = 'TENANT'
-GROUP BY u.id, u.name, b.id, b.status, b.check_in_date, b.deleted_at,
-         p.id, p.name, p.address, p.city, p.deleted_at, bed.id, bed.price, p.price;
-
-
--- 12c. Payment summary view
-CREATE OR REPLACE VIEW v_payment_summary AS
-SELECT
-  p.id AS pg_id,
-  p.name AS pg_name,
-  p.deleted_at AS pg_deleted_at,
-  COUNT(pay.id) AS total_payments,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED'), 0) AS total_collected,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING'), 0) AS total_pending,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.paid_date >= date_trunc('month', NOW())), 0) AS collected_this_month,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.paid_date >= date_trunc('year', NOW())), 0) AS collected_this_year,
-  COUNT(pay.id) FILTER (WHERE pay.status = 'PENDING' AND pay.due_date < NOW()) AS overdue_count,
-  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'PENDING' AND pay.due_date < NOW()), 0) AS overdue_amount
-FROM pgs p
-LEFT JOIN payments pay ON pay.pg_id = p.id AND pay.deleted_at IS NULL
-WHERE p.deleted_at IS NULL
-GROUP BY p.id, p.name, p.deleted_at;
-
-
--- 12d. Bed availability view
-CREATE OR REPLACE VIEW v_bed_availability AS
-SELECT
-  p.id AS pg_id,
-  p.name AS pg_name,
-  p.city,
-  p.gender,
-  p.deleted_at AS pg_deleted_at,
-  r.id AS room_id,
-  r.room_code,
-  r.room_type,
-  r.has_ac,
-  r.has_attached_bath,
-  bed.id AS bed_id,
-  bed.bed_number,
-  bed.status AS bed_status,
-  COALESCE(bed.price, p.price) AS bed_price
-FROM pgs p
-JOIN rooms r ON r.pg_id = p.id AND r.deleted_at IS NULL
-JOIN beds bed ON bed.room_id = r.id AND bed.deleted_at IS NULL
-WHERE p.deleted_at IS NULL AND p.status = 'APPROVED';
-
-
--- =============================================================
--- PART 13: Validation helper functions
+-- STEP 10: Validation helper functions
 -- =============================================================
 
--- 13a. Validate coupon before applying
+-- 10a. Validate coupon (read-only check, no side effects)
 CREATE OR REPLACE FUNCTION validate_coupon(
   p_code        TEXT,
   p_user_id     TEXT,
@@ -719,7 +1107,6 @@ DECLARE
   v_usage_count INTEGER;
   v_discount   NUMERIC(12,2);
 BEGIN
-  -- Find the coupon
   SELECT * INTO v_coupon
   FROM coupons
   WHERE code = p_code AND is_active = TRUE
@@ -729,7 +1116,6 @@ BEGIN
     RETURN jsonb_build_object('valid', false, 'error', 'Invalid or inactive coupon code');
   END IF;
 
-  -- Check validity dates
   IF v_coupon.valid_from > NOW() THEN
     RETURN jsonb_build_object('valid', false, 'error', 'Coupon is not yet active');
   END IF;
@@ -738,17 +1124,14 @@ BEGIN
     RETURN jsonb_build_object('valid', false, 'error', 'Coupon has expired');
   END IF;
 
-  -- Check usage limit
   IF v_coupon.usage_limit IS NOT NULL AND v_coupon.used_count >= v_coupon.usage_limit THEN
     RETURN jsonb_build_object('valid', false, 'error', 'Coupon usage limit reached');
   END IF;
 
-  -- Check minimum order amount
   IF v_coupon.min_order_amount IS NOT NULL AND p_order_amount < v_coupon.min_order_amount THEN
     RETURN jsonb_build_object('valid', false, 'error', 'Minimum order amount is Rs. ' || v_coupon.min_order_amount);
   END IF;
 
-  -- Check if user already used this coupon for this booking context
   SELECT COUNT(*) INTO v_usage_count
   FROM coupon_usages
   WHERE coupon_id = v_coupon.id AND user_id = p_user_id;
@@ -757,7 +1140,6 @@ BEGIN
     RETURN jsonb_build_object('valid', false, 'error', 'You have already used this coupon');
   END IF;
 
-  -- Calculate discount
   IF v_coupon.discount_type = 'PERCENTAGE' THEN
     v_discount := LEAST(
       (p_order_amount * v_coupon.discount_value / 100),
@@ -779,7 +1161,7 @@ END;
 $$;
 
 
--- 13b. Get PG occupancy stats
+-- 10b. Get PG occupancy stats
 CREATE OR REPLACE FUNCTION get_pg_occupancy(p_pg_id TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -812,7 +1194,7 @@ END;
 $$;
 
 
--- 13c. Get tenant payment history
+-- 10c. Get tenant payment history
 CREATE OR REPLACE FUNCTION get_tenant_payment_history(
   p_user_id  TEXT,
   p_limit    INTEGER DEFAULT 20,
@@ -851,11 +1233,51 @@ END;
 $$;
 
 
+-- 10d. Email validation
+CREATE OR REPLACE FUNCTION is_valid_email(p_email TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql IMMUTABLE
+AS $$
+BEGIN
+  RETURN p_email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$';
+END;
+$$;
+
+
+-- 10e. Indian phone validation
+CREATE OR REPLACE FUNCTION is_valid_indian_phone(p_phone TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql IMMUTABLE
+AS $$
+BEGIN
+  RETURN p_phone ~ '^\+91[6-9]\d{9}$|^[6-9]\d{9}$';
+END;
+$$;
+
+
+-- 10f. IFSC code validation
+CREATE OR REPLACE FUNCTION is_valid_ifsc(p_ifsc TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql IMMUTABLE
+AS $$
+BEGIN
+  RETURN p_ifsc ~ '^[A-Z]{4}0[A-Z0-9]{6}$';
+END;
+$$;
+
+
 -- =============================================================
 -- DONE! Phase 5 Hardening complete.
 -- =============================================================
--- Verify by running:
+-- Verify by running these queries separately in SQL Editor:
+--
 -- SELECT * FROM v_owner_dashboard LIMIT 5;
 -- SELECT * FROM v_tenant_dashboard LIMIT 5;
 -- SELECT * FROM v_payment_summary LIMIT 5;
+-- SELECT * FROM v_payment_reconciliation LIMIT 5;
 -- SELECT * FROM v_bed_availability LIMIT 5;
+-- SELECT get_pg_occupancy('pg-1');
+-- SELECT validate_coupon('WELCOME10', 'tenant-1', 12000);
+-- SELECT is_valid_email('test@example.com');
+-- SELECT is_valid_indian_phone('+919876543210');
+-- SELECT is_valid_ifsc('HDFC0001234');
