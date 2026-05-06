@@ -1,16 +1,27 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'stayeg-v1.2-secure-2025';
+// SECURITY FIX (v3): Removed hardcoded admin secret fallback.
+// ADMIN_SECRET must be set via environment variable — no default.
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+
+function verifyAdminSecret(request: NextRequest): NextResponse | null {
+  if (!ADMIN_SECRET) {
+    console.error('[ADMIN] ADMIN_SECRET not configured in environment');
+    return NextResponse.json({ error: 'Admin access not configured' }, { status: 503 });
+  }
+  const adminSecret = request.headers.get('x-admin-secret');
+  if (adminSecret !== ADMIN_SECRET) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  return null; // OK
+}
 
 // GET - List pending owner signups (role='OWNER' AND is_approved=false)
 export async function GET(request: NextRequest) {
   try {
-    // Verify admin secret
-    const adminSecret = request.headers.get('x-admin-secret');
-    if (adminSecret !== ADMIN_SECRET) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const forbidden = verifyAdminSecret(request);
+    if (forbidden) return forbidden;
 
     const { data, error } = await supabaseAdmin
       .from('users')
@@ -36,10 +47,8 @@ export async function GET(request: NextRequest) {
 // PUT - Approve or reject an owner signup
 export async function PUT(request: NextRequest) {
   try {
-    const adminSecret = request.headers.get('x-admin-secret');
-    if (adminSecret !== ADMIN_SECRET) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const forbidden = verifyAdminSecret(request);
+    if (forbidden) return forbidden;
 
     const { userId, action, reason } = await request.json();
 
@@ -61,12 +70,12 @@ export async function PUT(request: NextRequest) {
       .from('users')
       .update(updateData)
       .eq('id', userId)
-      .select()
+      .select('id,name,email,phone,role,is_approved,is_verified')
       .single();
 
     if (error) {
       console.error('Error updating owner:', error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: 'Failed to update owner' }, { status: 500 });
     }
 
     return NextResponse.json({ success: true, user: data });

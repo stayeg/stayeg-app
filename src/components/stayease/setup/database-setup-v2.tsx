@@ -274,7 +274,8 @@ export default function DatabaseSetupV2() {
   const [autoSetting, setAutoSetting] = useState(false);
   const [autoResult, setAutoResult] = useState<{ success: boolean; message: string; details?: string } | null>(null);
 
-  const ADMIN_SECRET = 'stayeg-v1.2-secure-2025';
+  // SECURITY FIX (v3): No hardcoded admin secret. User must enter it.
+  const [adminSecret, setAdminSecret] = useState('');
 
   const checkStatus = useCallback(async () => {
     try {
@@ -325,7 +326,7 @@ export default function DatabaseSetupV2() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': ADMIN_SECRET,
+          'x-admin-secret': adminSecret,
         },
       });
       const data = await res.json();
@@ -353,7 +354,7 @@ export default function DatabaseSetupV2() {
     try {
       const res = await fetch('/api/setup/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-admin-secret': ADMIN_SECRET },
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
       });
       const data = await res.json();
       if (data.success) {

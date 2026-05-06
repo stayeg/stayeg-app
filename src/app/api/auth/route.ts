@@ -1,10 +1,15 @@
 /**
- * Authentication API — StayEg v2
+ * Authentication API — StayEg v3 (Security Hardened)
  * 
- * GET  /api/auth       — User lookup (login by email/phone), requires password or OTP
- * GET  /api/auth?role=  — List users by role (admin)
- * POST /api/auth       — Register new user (with password hashing)
+ * GET  /api/auth       — List users by role (admin only)
+ * GET  /api/auth?pgId= — List PG tenants (owner/admin)
+ * POST /api/auth       — Login (email+password) OR Register new user
  * PUT  /api/auth       — Update profile (session-verified)
+ * 
+ * SECURITY FIXES (v3):
+ * - Login moved from GET to POST (password no longer in URL/query params)
+ * - password_hash removed from all API responses
+ * - Admin secret no longer has hardcoded fallback
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -13,64 +18,18 @@ import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { hashPassword, verifyPassword } from '@/lib/password';
 import { signToken } from '@/lib/jwt';
 
+// Safe user fields — NEVER include password_hash in API responses
+const SAFE_USER_FIELDS = 'id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at';
+
 // ============================
-// GET — Login / User lookup
+// GET — Admin user list / PG tenants (NO LOGIN)
 // ============================
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const email = searchParams.get('email');
-    const phone = searchParams.get('phone');
     const role = searchParams.get('role');
     const pgId = searchParams.get('pgId');
-    const password = searchParams.get('password');
-
-    // --- Login: fetch user by email or phone ---
-    if (email || phone) {
-      let query = supabaseAdmin
-        .from('users')
-        .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,password_hash');
-
-      if (email) query = query.eq('email', email.toLowerCase().trim());
-      if (phone) query = query.eq('phone', phone.trim());
-
-      const { data: users, error } = await query.limit(1);
-
-      if (error) {
-        console.error('GET /api/auth lookup error:', error.message);
-        return NextResponse.json({ error: 'Failed to look up user' }, { status: 500 });
-      }
-
-      if (!users || users.length === 0) {
-        return NextResponse.json({ error: 'User not found', code: 'USER_NOT_FOUND' }, { status: 404 });
-      }
-
-      const user = users[0];
-
-      // Password verification
-      if (user.password_hash && password) {
-        const isValid = await verifyPassword(password, user.password_hash);
-        if (!isValid) {
-          return NextResponse.json({ error: 'Invalid password', code: 'INVALID_PASSWORD' }, { status: 401 });
-        }
-      } else if (user.password_hash && !password) {
-        return NextResponse.json({ error: 'Password required', code: 'PASSWORD_REQUIRED' }, { status: 401 });
-      }
-
-      // Generate JWT token
-      const token = await signToken({
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-      });
-
-      // Return user data + token
-      return NextResponse.json({
-        user,
-        token,
-      });
-    }
 
     // If pgId provided, get tenants for that PG
     if (pgId) {
@@ -92,13 +51,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ data: bookings || [] });
     }
 
-    // List all users (admin only)
+    // List all users (admin only) — require auth for any GET without pgId
     const authResult = await requireSessionWithRole(request, ['ADMIN']);
     if ('error' in authResult) return authResult.error;
 
     let query = supabaseAdmin
       .from('users')
-      .select('id,name,email,phone,role,avatar,gender,is_verified,created_at')
+      .select(SAFE_USER_FIELDS)
       .order('created_at', { ascending: false });
 
     if (role) query = query.eq('role', role);
@@ -117,12 +76,61 @@ export async function GET(request: NextRequest) {
 }
 
 // ============================
-// POST — Register new user
+// POST — Login (email+password) OR Register new user
 // ============================
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { action } = body;
+
+    // ── LOGIN FLOW (action=login or email+password without name) ──
+    if (action === 'login' || (body.email && !body.name)) {
+      const { email, phone, password } = body;
+
+      if (!email && !phone) {
+        return NextResponse.json({ error: 'Email or phone is required', code: 'MISSING_IDENTIFIER' }, { status: 400 });
+      }
+
+      let query = supabaseAdmin
+        .from('users')
+        .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,password_hash');
+
+      if (email) query = query.eq('email', email.toLowerCase().trim());
+      if (phone) query = query.eq('phone', phone.trim());
+
+      const { data: users, error } = await query.limit(1);
+
+      if (error) {
+        console.error('POST /api/auth login error:', error.message);
+        return NextResponse.json({ error: 'Failed to look up user' }, { status: 500 });
+      }
+
+      if (!users || users.length === 0) {
+        return NextResponse.json({ error: 'User not found', code: 'USER_NOT_FOUND' }, { status: 404 });
+      }
+
+      const user = users[0];
+
+      // Password verification
+      if (user.password_hash && password) {
+        const isValid = await verifyPassword(password, user.password_hash);
+        if (!isValid) {
+          return NextResponse.json({ error: 'Invalid password', code: 'INVALID_PASSWORD' }, { status: 401 });
+        }
+      } else if (user.password_hash && !password) {
+        return NextResponse.json({ error: 'Password required', code: 'PASSWORD_REQUIRED' }, { status: 401 });
+      }
+
+      // Generate JWT token
+      const token = await signToken({ userId: user.id, email: user.email, role: user.role });
+
+      // Return user data + token — EXCLUDE password_hash
+      const { password_hash: _ph, ...safeUser } = user;
+      return NextResponse.json({ user: safeUser, token });
+    }
+
+    // ── REGISTER FLOW ──
     const { name, email, phone, password, role, gender, bio, city, occupation } = body;
 
     // Validate required fields
@@ -199,7 +207,7 @@ export async function POST(request: NextRequest) {
         occupation: occupation || null,
         password_hash: hashedPassword,
       })
-      .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at')
+      .select(SAFE_USER_FIELDS)
       .single();
 
     const user = insertedUser;

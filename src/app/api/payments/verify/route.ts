@@ -24,9 +24,14 @@ export async function POST(request: NextRequest) {
 
     // Verify payment signature
     const isValid = await verifyPayment({ orderId, paymentId, signature });
-    if (!isValid && signature) {
-      return NextResponse.json({ error: 'Payment verification failed' }, { status: 400 });
-    }
+
+    // Determine status and note based on verification result
+    const status = isValid ? 'COMPLETED' : 'PENDING';
+    const verification_note = isValid
+      ? 'Auto-verified: Razorpay signature confirmed'
+      : signature
+        ? 'Pending manual verification: signature invalid'
+        : 'Pending manual verification: simulated mode (no Razorpay config)';
 
     // Record the payment in database
     const { data: payment, error } = await supabaseAdmin
@@ -38,10 +43,11 @@ export async function POST(request: NextRequest) {
         amount: amount || 0,
         type: type || 'RENT',
         method: method || 'RAZORPAY',
-        status: 'COMPLETED',
+        status,
         paid_date: new Date().toISOString(),
         razorpay_order_id: orderId,
         razorpay_payment_id: paymentId,
+        verification_note,
       })
       .select()
       .single();

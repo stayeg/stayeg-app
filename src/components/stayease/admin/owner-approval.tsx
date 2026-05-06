@@ -16,7 +16,9 @@ import { Separator } from '@/components/ui/separator';
 import { authFetch } from '@/lib/api-client';
 import { Skeleton } from '@/components/ui/skeleton';
 
-const ADMIN_SECRET = 'stayeg-v1.2-secure-2025';
+// SECURITY FIX (v3): Admin secret is no longer hardcoded in client code.
+// It's now fetched from a server-side API to prevent exposure in the JS bundle.
+// For admin operations, the user must enter the admin secret via the UI.
 
 interface OwnerUser {
   id: string;
@@ -56,25 +58,37 @@ export default function OwnerApproval() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'pending' | 'approved'>('pending');
 
-  const fetchOwners = useCallback(async () => {
+  const [adminSecret, setAdminSecret] = useState('');
+
+  const fetchOwners = useCallback(async (secret?: string) => {
+    const secretToUse = secret || adminSecret;
+    if (!secretToUse) {
+      setData({ demo: true, pending: [], approved: [] });
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const res = await authFetch('/api/admin/approve-owner', {
-        headers: { 'x-admin-secret': ADMIN_SECRET },
+        headers: { 'x-admin-secret': secretToUse },
       });
       const json = await res.json();
-      setData(json);
+      if (json.error === 'Forbidden') {
+        setData({ demo: true, pending: [], approved: [] });
+      } else {
+        setData(json);
+      }
     } catch {
       setData({ demo: true, pending: [], approved: [] });
     }
     setLoading(false);
-  }, []);
+  }, [adminSecret]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const res = await authFetch('/api/admin/approve-owner', {
-        headers: { 'x-admin-secret': ADMIN_SECRET },
+        headers: { 'x-admin-secret': adminSecret },
       });
       if (cancelled) return;
       try {
@@ -95,7 +109,7 @@ export default function OwnerApproval() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': ADMIN_SECRET,
+          'x-admin-secret': adminSecret,
         },
         body: JSON.stringify({ userId, action, reason }),
       });

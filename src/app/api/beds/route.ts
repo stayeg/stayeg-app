@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     // Verify the room exists
     const { data: room, error: roomError } = await supabaseAdmin
       .from('rooms')
-      .select('id')
+      .select('id, pg_id')
       .eq('id', roomId)
       .single();
 
@@ -38,6 +38,22 @@ export async function POST(request: NextRequest) {
         { error: 'Room not found' },
         { status: 404 }
       );
+    }
+
+    // SECURITY FIX: Verify ownership — owners can only create beds in their own PGs
+    if (authResult.user.role !== 'ADMIN') {
+      const { data: pg } = await supabaseAdmin
+        .from('pgs')
+        .select('owner_id')
+        .eq('id', room.pg_id)
+        .single();
+
+      if (!pg || pg.owner_id !== authResult.user.id) {
+        return NextResponse.json(
+          { error: 'Forbidden: you can only create beds in your own PGs' },
+          { status: 403 }
+        );
+      }
     }
 
     // Check for duplicate bed number in the same room
@@ -106,7 +122,7 @@ export async function PUT(request: NextRequest) {
     // Fetch current bed
     const { data: currentBed, error: fetchError } = await supabaseAdmin
       .from('beds')
-      .select('id, status')
+      .select('id, status, room_id')
       .eq('id', id)
       .single();
 
@@ -115,6 +131,30 @@ export async function PUT(request: NextRequest) {
         { error: 'Bed not found' },
         { status: 404 }
       );
+    }
+
+    // SECURITY FIX: Verify ownership — owners can only update beds in their own PGs
+    if (authResult.user.role !== 'ADMIN') {
+      const { data: roomData } = await supabaseAdmin
+        .from('rooms')
+        .select('pg_id')
+        .eq('id', currentBed.room_id)
+        .single();
+
+      if (roomData) {
+        const { data: pg } = await supabaseAdmin
+          .from('pgs')
+          .select('owner_id')
+          .eq('id', roomData.pg_id)
+          .single();
+
+        if (!pg || pg.owner_id !== authResult.user.id) {
+          return NextResponse.json(
+            { error: 'Forbidden: you can only update beds in your own PGs' },
+            { status: 403 }
+          );
+        }
+      }
     }
 
     const updateData: Record<string, unknown> = { status };

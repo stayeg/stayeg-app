@@ -57,12 +57,17 @@ export async function POST(request: NextRequest) {
     // Verify the PG exists
     const { data: pg, error: pgError } = await supabaseAdmin
       .from('pgs')
-      .select('id')
+      .select('id, owner_id')
       .eq('id', pgId)
       .single();
 
     if (pgError || !pg) {
       return NextResponse.json({ error: 'PG not found' }, { status: 404 });
+    }
+
+    // SECURITY FIX: Verify ownership — owners can only create rooms in their own PGs
+    if (authResult.user.role !== 'ADMIN' && pg.owner_id !== authResult.user.id) {
+      return NextResponse.json({ error: 'Forbidden: you can only create rooms in your own PGs' }, { status: 403 });
     }
 
     // Check for duplicate room code in the same PG
@@ -115,6 +120,29 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
 
+    // SECURITY FIX: Verify ownership — owners can only update rooms in their own PGs
+    if (authResult.user.role !== 'ADMIN') {
+      const { data: room } = await supabaseAdmin
+        .from('rooms')
+        .select('pg_id')
+        .eq('id', id)
+        .single();
+
+      if (!room) {
+        return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+      }
+
+      const { data: pg } = await supabaseAdmin
+        .from('pgs')
+        .select('owner_id')
+        .eq('id', room.pg_id)
+        .single();
+
+      if (!pg || pg.owner_id !== authResult.user.id) {
+        return NextResponse.json({ error: 'Forbidden: you can only update rooms in your own PGs' }, { status: 403 });
+      }
+    }
+
     const updateData: Record<string, unknown> = {};
     if (data.roomCode !== undefined) updateData.room_code = data.roomCode;
     if (data.roomType !== undefined) updateData.room_type = data.roomType;
@@ -149,6 +177,29 @@ export async function DELETE(request: NextRequest) {
 
     if (!roomId) {
       return NextResponse.json({ error: 'roomId is required' }, { status: 400 });
+    }
+
+    // SECURITY FIX: Verify ownership — owners can only delete rooms in their own PGs
+    if (authResult.user.role !== 'ADMIN') {
+      const { data: room } = await supabaseAdmin
+        .from('rooms')
+        .select('pg_id')
+        .eq('id', roomId)
+        .single();
+
+      if (!room) {
+        return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+      }
+
+      const { data: pg } = await supabaseAdmin
+        .from('pgs')
+        .select('owner_id')
+        .eq('id', room.pg_id)
+        .single();
+
+      if (!pg || pg.owner_id !== authResult.user.id) {
+        return NextResponse.json({ error: 'Forbidden: you can only delete rooms in your own PGs' }, { status: 403 });
+      }
     }
 
     // Check for occupied beds before deleting

@@ -71,8 +71,8 @@ export async function verifyPayment(params: {
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
   if (!keySecret) {
-    // Simulated mode — always return true
-    return true;
+    // Simulated mode — cannot verify, return false
+    return false;
   }
 
   const crypto = await import('crypto');

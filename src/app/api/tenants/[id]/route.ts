@@ -1,28 +1,10 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSession } from '@/lib/api-auth';
+import { requireSessionWithRole } from '@/lib/api-auth';
 
-// Auth helper: verify user is an owner via x-user-email
-async function getOwnerSession(request: NextRequest) {
-  const userEmail = request.headers.get('x-user-email');
-  if (!userEmail) {
-    return { error: NextResponse.json({ error: 'Authentication required: missing user identity' }, { status: 401 }) };
-  }
-  const { data: user, error } = await supabaseAdmin
-    .from('users')
-    .select('id, email, role')
-    .eq('email', userEmail)
-    .limit(1)
-    .single();
-
-  if (error || !user) {
-    return { error: NextResponse.json({ error: 'Authentication failed: user not found' }, { status: 401 }) };
-  }
-  if (user.role !== 'OWNER') {
-    return { error: NextResponse.json({ error: 'Forbidden: owner access required' }, { status: 403 }) };
-  }
-  return { user };
-}
+// SECURITY FIX (v3): Replaced getOwnerSession() (x-user-email header) 
+// with proper JWT-based authentication via requireSessionWithRole.
+// The x-user-email header was forgeable — anyone could impersonate an owner.
 
 // ============================
 // GET /api/tenants/[id] — fetch single tenant booking details
@@ -33,7 +15,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authResult = await getOwnerSession(request);
+    const authResult = await requireSessionWithRole(request, ['OWNER', 'ADMIN']);
     if ('error' in authResult) return authResult.error;
 
     const { id } = await params;
@@ -54,6 +36,11 @@ export async function GET(
       return NextResponse.json({ error: 'Tenant booking not found' }, { status: 404 });
     }
 
+    // Owner-scoping: verify the booking's PG belongs to this owner (unless ADMIN)
+    if (authResult.user.role !== 'ADMIN' && booking.pg?.owner_id && booking.pg.owner_id !== authResult.user.id) {
+      return NextResponse.json({ error: 'Forbidden: not your tenant' }, { status: 403 });
+    }
+
     return NextResponse.json(booking);
   } catch (error) {
     console.error('Error fetching tenant:', error);
@@ -70,7 +57,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authResult = await getOwnerSession(request);
+    const authResult = await requireSessionWithRole(request, ['OWNER', 'ADMIN']);
     if ('error' in authResult) return authResult.error;
 
     const { id } = await params;
@@ -80,12 +67,17 @@ export async function PUT(
     // Fetch existing booking
     const { data: existing, error: fetchError } = await supabaseAdmin
       .from('bookings')
-      .select('id, bed_id, status')
+      .select('id, bed_id, status, pg:pgs(owner_id)')
       .eq('id', id)
       .single();
 
     if (fetchError || !existing) {
       return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
+    }
+
+    // Owner-scoping: verify this booking belongs to the owner's PG (unless ADMIN)
+    if (authResult.user.role !== 'ADMIN' && (existing as any)?.pg?.owner_id && (existing as any).pg.owner_id !== authResult.user.id) {
+      return NextResponse.json({ error: 'Forbidden: not your tenant' }, { status: 403 });
     }
 
     // Handle bed change
@@ -145,7 +137,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authResult = await getOwnerSession(request);
+    const authResult = await requireSessionWithRole(request, ['OWNER', 'ADMIN']);
     if ('error' in authResult) return authResult.error;
 
     const { id } = await params;
@@ -153,12 +145,17 @@ export async function DELETE(
     // Fetch booking
     const { data: booking, error: fetchError } = await supabaseAdmin
       .from('bookings')
-      .select('id, bed_id, status')
+      .select('id, bed_id, status, pg:pgs(owner_id)')
       .eq('id', id)
       .single();
 
     if (fetchError || !booking) {
       return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
+    }
+
+    // Owner-scoping: verify this booking belongs to the owner's PG (unless ADMIN)
+    if (authResult.user.role !== 'ADMIN' && (booking as any)?.pg?.owner_id && (booking as any).pg.owner_id !== authResult.user.id) {
+      return NextResponse.json({ error: 'Forbidden: not your tenant' }, { status: 403 });
     }
 
     // Cancel the booking

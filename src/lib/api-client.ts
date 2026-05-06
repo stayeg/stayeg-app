@@ -1,11 +1,10 @@
 /**
- * Authenticated API client for the StayEg frontend — v2.
+ * Authenticated API client for the StayEg frontend — v3 (Security Hardened).
  * 
- * Supports JWT Bearer token authentication (preferred)
- * and falls back to x-user-email header for backward compatibility.
+ * Uses JWT Bearer token authentication only.
  * 
- * Reads the JWT token from the Zustand persisted store (localStorage)
- * and automatically attaches it as the Authorization header.
+ * SECURITY FIX (v3): Removed x-user-email legacy fallback header.
+ * All authentication now goes through JWT tokens only.
  */
 
 import { verifyTokenClient, extractToken } from '@/lib/jwt';
@@ -99,10 +98,8 @@ export async function authFetch(
     headers.set('authorization', `Bearer ${token}`);
   }
 
-  // Legacy fallback: email header (for backward compat during migration)
-  if (email && !headers.has('x-user-email')) {
-    headers.set('x-user-email', email);
-  }
+  // SECURITY FIX (v3): Removed x-user-email header — JWT-only auth
+  // The x-user-email header was forgeable and has been removed from all API routes
 
   return fetch(input, { ...init, headers });
 }

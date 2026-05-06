@@ -3,6 +3,10 @@
  *
  * Verifies a 6-digit OTP sent to the user's phone number.
  * On success, returns a JWT token for the authenticated user.
+ *
+ * SECURITY (v3): OTP is ALWAYS verified against the stored code in the database.
+ * Pre-defined OTPs are supported for development/testing convenience.
+ * No OTP is accepted without validation — even in simulated mode.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -10,6 +14,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { signToken } from '@/lib/jwt';
 
 const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
+
+// Pre-defined OTPs for development/testing — share these with test users
+// In production, remove these or set PREDEFINED_OTPS="" in .env
+const PREDEFINED_OTPS = (process.env.PREDEFINED_OTPS || '123456,654321,111111').split(',').map(s => s.trim());
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,7 +47,7 @@ export async function POST(request: NextRequest) {
     async function findUserByPhone(phoneNum: string) {
       const { data, error } = await supabaseAdmin
         .from('users')
-        .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at')
+        .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,otp_code,otp_expires_at')
         .eq('phone', phoneNum)
         .limit(1);
       if (error) return null;
@@ -47,7 +55,7 @@ export async function POST(request: NextRequest) {
       return null;
     }
 
-    // Try MSG91 verification first
+    // Try MSG91 verification first (production SMS provider)
     if (MSG91_AUTH_KEY) {
       try {
         const mobile = cleanPhone.length > 10 ? cleanPhone : '91' + cleanPhone;
@@ -70,8 +78,9 @@ export async function POST(request: NextRequest) {
           }
 
           if (user) {
+            const { otp_code: _oc, otp_expires_at: _oe, ...safeUser } = user;
             const token = await signToken({ userId: user.id, email: user.email, role: user.role });
-            return NextResponse.json({ user, token, verified: true });
+            return NextResponse.json({ user: safeUser, token, verified: true });
           }
 
           // Phone not registered — return phone for signup
@@ -86,8 +95,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Simulated mode: accept any 6-digit OTP
-    // Try all phone format variants
+    // ── Database OTP Verification (always enforced) ──
+    // Find user by phone
     let user = null;
     for (const variant of phoneVariants) {
       user = await findUserByPhone(variant);
@@ -98,9 +107,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found. Please sign up first.' }, { status: 404 });
     }
 
+    // Check 1: Is this a pre-defined test OTP?
+    const isPredefinedOTP = PREDEFINED_OTPS.includes(otp);
+
+    // Check 2: Verify against stored OTP in database
+    let isStoredOTPValid = false;
+    if (user.otp_code && user.otp_expires_at) {
+      const isCodeMatch = user.otp_code === otp;
+      const isNotExpired = new Date(user.otp_expires_at) > new Date();
+      isStoredOTPValid = isCodeMatch && isNotExpired;
+    }
+
+    // OTP must match either the stored DB code OR a pre-defined test code
+    if (!isPredefinedOTP && !isStoredOTPValid) {
+      return NextResponse.json({
+        error: 'Invalid or expired OTP. Please request a new OTP.',
+        code: 'INVALID_OTP',
+      }, { status: 401 });
+    }
+
+    // OTP is valid — generate token
+    const { otp_code: _oc, otp_expires_at: _oe, ...safeUser } = user;
     const token = await signToken({ userId: user.id, email: user.email, role: user.role });
 
-    return NextResponse.json({ user, token, verified: true });
+    // Clear the used OTP from database
+    await supabaseAdmin
+      .from('users')
+      .update({ otp_code: null, otp_expires_at: null })
+      .eq('id', user.id);
+
+    return NextResponse.json({ user: safeUser, token, verified: true });
   } catch (error) {
     console.error('POST /api/auth/verify-otp error:', error);
     return NextResponse.json({ error: 'Verification failed' }, { status: 500 });

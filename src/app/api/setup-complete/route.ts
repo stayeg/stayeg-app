@@ -29,7 +29,8 @@ async function tryConnect(connectionString: string): Promise<{ client: any; pool
   }
 }
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'stayeg-v1.2-secure-2025';
+// SECURITY FIX (v3): No hardcoded admin secret fallback. Must be set via env.
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 
 export async function POST(request: NextRequest) {
   try {

@@ -17,7 +17,21 @@ export async function GET(request: NextRequest) {
       .select('*')
       .order('role', { ascending: true });
 
-    if (pgId) query = query.eq('pg_id', pgId);
+    if (pgId) {
+      // SECURITY FIX: When pgId is specified, verify the PG belongs to the owner
+      if (authResult.user.role !== 'ADMIN') {
+        const { data: pg } = await supabaseAdmin
+          .from('pgs')
+          .select('owner_id')
+          .eq('id', pgId)
+          .single();
+
+        if (!pg || pg.owner_id !== authResult.user.id) {
+          return NextResponse.json({ error: 'Forbidden: you can only view workers in your own PGs' }, { status: 403 });
+        }
+      }
+      query = query.eq('pg_id', pgId);
+    }
     if (role) query = query.eq('role', role);
 
     const { data: workers, error } = await query;
@@ -40,6 +54,24 @@ export async function POST(request: NextRequest) {
     if ('error' in authResult) return authResult.error;
 
     const body = await request.json();
+
+    // SECURITY FIX: Verify the PG belongs to the owner before creating a worker
+    if (authResult.user.role !== 'ADMIN') {
+      const pgId = body.pgId;
+      if (!pgId) {
+        return NextResponse.json({ error: 'pgId is required' }, { status: 400 });
+      }
+      const { data: pg } = await supabaseAdmin
+        .from('pgs')
+        .select('owner_id')
+        .eq('id', pgId)
+        .single();
+
+      if (!pg || pg.owner_id !== authResult.user.id) {
+        return NextResponse.json({ error: 'Forbidden: you can only create workers in your own PGs' }, { status: 403 });
+      }
+    }
+
     const { data: worker, error } = await supabaseAdmin
       .from('workers')
       .insert({
@@ -71,6 +103,29 @@ export async function PUT(request: NextRequest) {
 
     if (!id) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
+    }
+
+    // SECURITY FIX: Verify ownership — owners can only update workers in their own PGs
+    if (authResult.user.role !== 'ADMIN') {
+      const { data: worker } = await supabaseAdmin
+        .from('workers')
+        .select('pg_id')
+        .eq('id', id)
+        .single();
+
+      if (!worker) {
+        return NextResponse.json({ error: 'Worker not found' }, { status: 404 });
+      }
+
+      const { data: pg } = await supabaseAdmin
+        .from('pgs')
+        .select('owner_id')
+        .eq('id', worker.pg_id)
+        .single();
+
+      if (!pg || pg.owner_id !== authResult.user.id) {
+        return NextResponse.json({ error: 'Forbidden: you can only update workers in your own PGs' }, { status: 403 });
+      }
     }
 
     const updateData: Record<string, unknown> = {};

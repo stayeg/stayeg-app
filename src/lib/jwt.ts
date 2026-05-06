@@ -120,6 +120,8 @@ export async function signToken(payload: Omit<TokenPayload, 'iat' | 'exp'>): Pro
 export async function verifyToken(token: string): Promise<TokenPayload | null> {
   await ensureServerJWT();
   if (_verifyTokenServer) return _verifyTokenServer(token);
-  // Fallback to client-safe decode if server module unavailable
-  return verifyTokenClient(token);
+  // SECURITY: Do NOT fall back to unverified decode.
+  // If jsonwebtoken fails to load, authentication must fail closed.
+  console.error('[JWT] CRITICAL: jsonwebtoken module not loaded. Token verification denied.');
+  return null;
 }

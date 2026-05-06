@@ -90,10 +90,15 @@ export async function POST(request: NextRequest) {
     if ('error' in authResult) return authResult.error;
 
     const body = await request.json();
-    const { name, ownerId, description, address, city, gender, price, securityDeposit, amenities, images } = body;
-    if (!name || !ownerId || !address) {
-      return NextResponse.json({ error: 'name, ownerId, and address are required' }, { status: 400 });
+    const { name, description, address, city, gender, price, securityDeposit, amenities, images } = body;
+    if (!name || !address) {
+      return NextResponse.json({ error: 'name and address are required' }, { status: 400 });
     }
+
+    // SECURITY FIX (v3): Always use authenticated user's ID as owner_id
+    // Owners can no longer create PGs under a different owner's ID
+    const ownerId = authResult.user.id;
+
     const { data: pg, error } = await supabaseAdmin
       .from('pgs')
       .insert({
@@ -131,6 +136,23 @@ export async function PUT(request: NextRequest) {
     if (!id) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
+
+    // SECURITY FIX (v3): Verify ownership — owners can only update their own PGs
+    if (authResult.user.role !== 'ADMIN') {
+      const { data: pg, error: pgError } = await supabaseAdmin
+        .from('pgs')
+        .select('owner_id')
+        .eq('id', id)
+        .single();
+      
+      if (pgError || !pg) {
+        return NextResponse.json({ error: 'PG not found' }, { status: 404 });
+      }
+      if (pg.owner_id !== authResult.user.id) {
+        return NextResponse.json({ error: 'Forbidden: you can only update your own PGs' }, { status: 403 });
+      }
+    }
+
     const updateData: Record<string, unknown> = {};
     if (data.name !== undefined) updateData.name = data.name;
     if (data.description !== undefined) updateData.description = data.description;
@@ -141,8 +163,14 @@ export async function PUT(request: NextRequest) {
     if (data.securityDeposit !== undefined) updateData.security_deposit = data.securityDeposit;
     if (data.amenities !== undefined) updateData.amenities = Array.isArray(data.amenities) ? data.amenities.join(',') : data.amenities;
     if (data.images !== undefined) updateData.images = Array.isArray(data.images) ? data.images.join(',') : data.images;
-    if (data.status !== undefined) updateData.status = data.status;
-    if (data.isVerified !== undefined) updateData.is_verified = data.isVerified;
+
+    // SECURITY FIX (v3): Only ADMIN can change status and verification
+    // Owners can no longer self-approve or self-verify their PGs
+    if (authResult.user.role === 'ADMIN') {
+      if (data.status !== undefined) updateData.status = data.status;
+      if (data.isVerified !== undefined) updateData.is_verified = data.isVerified;
+      if (data.isApproved !== undefined) updateData.is_approved = data.isApproved;
+    }
 
     const { data: pg, error } = await supabaseAdmin
       .from('pgs')

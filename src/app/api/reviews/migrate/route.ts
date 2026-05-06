@@ -1,9 +1,12 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { requireSessionWithRole } from '@/lib/api-auth';
 
-// POST /api/reviews/migrate — Run the reviews table migration
-export async function POST() {
+// POST /api/reviews/migrate — Run the reviews table migration (admin only)
+export async function POST(request: NextRequest) {
   try {
+    const authResult = await requireSessionWithRole(request, ['ADMIN']);
+    if ('error' in authResult) return authResult.error;
     const sql = `
 CREATE TABLE IF NOT EXISTS reviews (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
