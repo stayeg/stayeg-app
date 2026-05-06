@@ -12,6 +12,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { signToken } from '@/lib/jwt';
+import { captureException } from '@/lib/sentry-server';
 
 const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
 
@@ -142,6 +143,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ user: safeUser, token, verified: true });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/auth/verify-otp' });
     console.error('POST /api/auth/verify-otp error:', error);
     return NextResponse.json({ error: 'Verification failed' }, { status: 500 });
   }

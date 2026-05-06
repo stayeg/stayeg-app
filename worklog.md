@@ -1,22 +1,35 @@
 ---
-Task ID: 1
-Agent: main
-Task: Complete Phase 2 remaining items (C-3 RLS, H-11 Booking Race Condition, Bank Account Fields)
+Task ID: sentry-setup
+Agent: Main Agent
+Task: Set up Sentry error monitoring and configure Supabase Auth settings
 
 Work Log:
-- Checked current state of codebase: confirmed all Phase 1 + Phase 2 code fixes were already applied
-- Created STAYEG-PHASE2-MIGRATION.sql with proper RLS policies, atomic booking RPC, bank account columns
-- Could not connect to Supabase DB directly (IPv6/unreachable from container)
-- Updated PG types (lib/types.ts) to include bank account fields
-- Updated PG API route (api/pgs/route.ts) PUT handler to support bank account fields
-- Created dedicated bank-details API (api/pgs/bank-details/route.ts) with GET + PUT, account number masking
-- Updated PG detail API (api/pgs/[id]/route.ts) to mask bank account numbers and include bank fields
-- Updated owner PG management UI (owner/pg-management.tsx) with bank account form fields
-- Booking route already has create_booking_atomic RPC call with fallback — just needs the SQL function in DB
-- Build succeeded, dev server restarted
+- Reviewed existing Sentry setup (partial - SDK installed, server config existed but client was never initialized)
+- Created 3 Sentry Next.js config files at project root (v10+ approach):
+  - sentry.client.config.ts (client-side with Replay, performance sampling)
+  - sentry.server.config.ts (server-side with breadcrumb support)
+  - sentry.edge.config.ts (edge runtime support)
+- Updated instrumentation.ts for edge runtime Sentry initialization
+- Updated next.config.ts — removed broken withSentryConfig wrapper (was causing server crashes), kept plain config
+- Initialized Sentry client-side in Providers component (was defined but never called)
+- Updated error.tsx to report errors to Sentry via captureException
+- Updated global-error.tsx to report critical errors to Sentry
+- Created /api/health endpoint for monitoring
+- Added captureException to 6 critical API route groups:
+  - /api/auth (GET, POST, PUT)
+  - /api/auth/verify-otp
+  - /api/bookings (GET, POST, PATCH)
+  - /api/payments/create-order
+  - /api/payments/verify
+  - /api/payments/webhook
+  - /api/pgs (GET, POST, PUT)
+  - /api/complaints (GET, POST, PUT)
+- Created api-handler.ts utility with withApiHandler wrapper for future use
+- Provided Supabase Dashboard Auth configuration instructions
 
 Stage Summary:
-- Migration SQL file ready at /home/z/my-project/download/STAYEG-PHASE2-MIGRATION.sql
-- User needs to run this SQL in Supabase Dashboard > SQL Editor
-- All code changes are applied and compiled successfully
-- Phase 1 + Phase 2 are now 100% complete (code-level)
+- Sentry SDK fully configured and integrated
+- All critical API routes now report 5xx errors to Sentry
+- Health check endpoint available at /api/health
+- NEXT_PUBLIC_SENTRY_DSN still empty in .env — user needs to create Sentry account and add DSN
+- Supabase Auth settings need manual Dashboard configuration

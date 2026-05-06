@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
+import { captureException } from '@/lib/sentry-server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -78,6 +79,7 @@ export async function GET(request: NextRequest) {
       headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' },
     });
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/pgs' });
     console.error('Error fetching PGs:', error);
     return NextResponse.json({ error: 'Failed to fetch PGs' }, { status: 500 });
   }
@@ -120,6 +122,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(pg, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/pgs' });
     console.error('Error creating PG:', error);
     return NextResponse.json({ error: 'Failed to create PG' }, { status: 500 });
   }
@@ -190,6 +193,7 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(pg);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/pgs' });
     console.error('Error updating PG:', error);
     return NextResponse.json({ error: 'Failed to update PG' }, { status: 500 });
   }

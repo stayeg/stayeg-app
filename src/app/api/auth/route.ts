@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { hashPassword, verifyPassword } from '@/lib/password';
 import { signToken } from '@/lib/jwt';
+import { captureException } from '@/lib/sentry-server';
 
 // Safe user fields — NEVER include password_hash in API responses
 const SAFE_USER_FIELDS = 'id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,bank_account_number,bank_ifsc,bank_name,account_holder_name,upi_id';
@@ -70,6 +71,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ users: users || [] });
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/auth' });
     console.error('GET /api/auth error:', error);
     return NextResponse.json({ error: 'Failed to fetch users' }, { status: 500 });
   }
@@ -227,6 +229,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ user, token }, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/auth' });
     console.error('POST /api/auth error:', error);
     return NextResponse.json({ error: 'Failed to create user' }, { status: 500 });
   }
@@ -298,6 +301,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ user: updatedUser });
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/auth' });
     console.error('PUT /api/auth error:', error);
     return NextResponse.json({ error: 'Failed to update profile' }, { status: 500 });
   }

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
+import { captureException } from '@/lib/sentry-server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -47,6 +48,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(formatted);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/bookings' });
     console.error('Error fetching bookings:', error);
     return NextResponse.json({ error: 'Failed to fetch bookings' }, { status: 500 });
   }
@@ -163,6 +165,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(fullBooking, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/bookings' });
     console.error('Error creating booking:', error);
     return NextResponse.json({ error: 'Failed to create booking' }, { status: 500 });
   }
@@ -228,6 +231,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json(booking);
   } catch (error) {
+    captureException(error, { endpoint: 'PATCH /api/bookings' });
     console.error('Error updating booking:', error);
     return NextResponse.json({ error: 'Failed to update booking' }, { status: 500 });
   }

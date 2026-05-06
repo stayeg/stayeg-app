@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
 import { verifyPayment } from '@/lib/razorpay';
 import { sendNotification } from '@/lib/notifications';
+import { captureException } from '@/lib/sentry-server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,6 +70,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, payment });
   } catch (error: any) {
+    captureException(error, { endpoint: 'POST /api/payments/verify' });
     console.error('POST /api/payments/verify error:', error);
     return NextResponse.json({ error: 'Payment verification failed' }, { status: 500 });
   }

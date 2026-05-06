@@ -14,6 +14,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
+import { captureException } from '@/lib/sentry-server';
 
 // Webhook secret from Razorpay Dashboard
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
@@ -191,6 +192,7 @@ export async function POST(request: NextRequest) {
     // Always return 200 to acknowledge receipt
     return NextResponse.json({ received: true });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/payments/webhook' });
     console.error('Webhook processing error:', error);
     // Still return 200 to prevent Razorpay from retrying
     return NextResponse.json({ received: true, error: 'Processing error' });

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
+import { captureException } from '@/lib/sentry-server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -35,6 +36,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(complaints || []);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/complaints' });
     console.error('Error fetching complaints:', error);
     return NextResponse.json({ error: 'Failed to fetch complaints' }, { status: 500 });
   }
@@ -72,6 +74,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(complaint, { status: 201 });
   } catch (error) {
+    captureException(error, { endpoint: 'POST /api/complaints' });
     console.error('Error creating complaint:', error);
     return NextResponse.json({ error: 'Failed to create complaint' }, { status: 500 });
   }
@@ -103,6 +106,7 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
     return NextResponse.json(complaint);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/complaints' });
     console.error('Error updating complaint:', error);
     return NextResponse.json({ error: 'Failed to update complaint' }, { status: 500 });
   }

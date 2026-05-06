@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+
 const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "preview-chat-b1f7b228-d558-43b2-a40e-9099a3e86d3d.space.z.ai",
@@ -19,4 +20,5 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
 };
+
 export default nextConfig;

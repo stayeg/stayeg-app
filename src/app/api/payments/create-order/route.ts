@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
 import { createOrder, getKeyId } from '@/lib/razorpay';
+import { captureException } from '@/lib/sentry-server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,6 +48,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error: any) {
+    captureException(error, { endpoint: 'POST /api/payments/create-order' });
     console.error('POST /api/payments/create-order error:', error);
     return NextResponse.json({ error: 'Failed to create order' }, { status: 500 });
   }
