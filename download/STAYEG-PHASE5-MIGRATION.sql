@@ -112,8 +112,10 @@ CREATE POLICY "webhook_events_service_only" ON webhook_events FOR ALL USING (aut
 ALTER TABLE payments ALTER COLUMN type SET NOT NULL;
 ALTER TABLE payments ALTER COLUMN status SET NOT NULL;
 ALTER TABLE bookings ALTER COLUMN status SET NOT NULL;
-ALTER TABLE notifications ALTER COLUMN is_read SET NOT NULL DEFAULT false;
-ALTER TABLE notifications ALTER COLUMN type SET NOT NULL DEFAULT 'INFO';
+ALTER TABLE notifications ALTER COLUMN is_read SET DEFAULT false;
+ALTER TABLE notifications ALTER COLUMN is_read SET NOT NULL;
+ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'INFO';
+ALTER TABLE notifications ALTER COLUMN type SET NOT NULL;
 
 -- 3b. CHECK constraints for data validation
 ALTER TABLE pgs ADD CONSTRAINT pgs_price_positive CHECK (price >= 0);
