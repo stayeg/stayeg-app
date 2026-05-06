@@ -164,6 +164,14 @@ export async function PUT(request: NextRequest) {
     if (data.amenities !== undefined) updateData.amenities = Array.isArray(data.amenities) ? data.amenities.join(',') : data.amenities;
     if (data.images !== undefined) updateData.images = Array.isArray(data.images) ? data.images.join(',') : data.images;
 
+    // Bank account details for PG owners (payment settlement)
+    if (data.bankAccountName !== undefined) updateData.bank_account_name = data.bankAccountName;
+    if (data.bankAccountNumber !== undefined) updateData.bank_account_number = data.bankAccountNumber;
+    if (data.bankIfscCode !== undefined) updateData.bank_ifsc_code = data.bankIfscCode;
+    if (data.bankName !== undefined) updateData.bank_name = data.bankName;
+    if (data.bankBranch !== undefined) updateData.bank_branch = data.bankBranch;
+    if (data.upiId !== undefined) updateData.upi_id = data.upiId;
+
     // SECURITY FIX (v3): Only ADMIN can change status and verification
     // Owners can no longer self-approve or self-verify their PGs
     if (authResult.user.role === 'ADMIN') {

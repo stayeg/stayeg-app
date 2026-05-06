@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Edit2, Building2, MapPin, Star, BedDouble, ChevronDown, ChevronUp, X, Check, Loader2,
-  Trash2, Search, Filter,
+  Trash2, Search, Filter, Landmark, Wallet,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -48,6 +48,8 @@ export default function PGManagement() {
   const [form, setForm] = useState({
     name: '', address: '', city: 'Bangalore', gender: 'UNISEX' as string,
     price: '', securityDeposit: '', description: '', amenities: [] as string[], images: '',
+    bankAccountName: '', bankAccountNumber: '', bankIfscCode: '',
+    bankName: '', bankBranch: '', upiId: '',
   });
 
   const ownerId = currentUser?.id;
@@ -97,27 +99,37 @@ export default function PGManagement() {
       queryClient.invalidateQueries({ queryKey: ['owner-analytics'] });
       showToast('PG created successfully!');
       setAddOpen(false);
-      setForm({ name: '', address: '', city: 'Bangalore', gender: 'UNISEX', price: '', securityDeposit: '', description: '', amenities: [], images: '' });
+      setForm({ name: '', address: '', city: 'Bangalore', gender: 'UNISEX', price: '', securityDeposit: '', description: '', amenities: [], images: '', bankAccountName: '', bankAccountNumber: '', bankIfscCode: '', bankName: '', bankBranch: '', upiId: '' });
     },
     onError: () => showToast('Failed to create PG'),
   });
 
   const updateMutation = useMutation({
     mutationFn: async (data: typeof form & { id: string }) => {
+      const payload: Record<string, unknown> = {
+        id: data.id,
+        name: data.name,
+        address: data.address,
+        city: data.city,
+        gender: data.gender,
+        price: Number(data.price) || 0,
+        securityDeposit: Number(data.securityDeposit) || 0,
+        description: data.description,
+        amenities: data.amenities,
+      };
+      // Only include bank details if any field is provided
+      if (data.bankAccountName || data.bankAccountNumber || data.bankIfscCode || data.bankName || data.bankBranch || data.upiId) {
+        if (data.bankAccountName) payload.bankAccountName = data.bankAccountName;
+        if (data.bankAccountNumber) payload.bankAccountNumber = data.bankAccountNumber;
+        if (data.bankIfscCode) payload.bankIfscCode = data.bankIfscCode;
+        if (data.bankName) payload.bankName = data.bankName;
+        if (data.bankBranch) payload.bankBranch = data.bankBranch;
+        if (data.upiId) payload.upiId = data.upiId;
+      }
       const res = await authFetch('/api/pgs', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: data.id,
-          name: data.name,
-          address: data.address,
-          city: data.city,
-          gender: data.gender,
-          price: Number(data.price) || 0,
-          securityDeposit: Number(data.securityDeposit) || 0,
-          description: data.description,
-          amenities: data.amenities,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Failed to update PG');
       return res.json();
@@ -173,6 +185,12 @@ export default function PGManagement() {
       description: pg.description || '',
       amenities: typeof pg.amenities === 'string' ? pg.amenities.split(',').filter(Boolean) : pg.amenities || [],
       images: typeof pg.images === 'string' ? pg.images : String((pg.images || [])).split(',').join(','),
+      bankAccountName: pg.bankAccountName || '',
+      bankAccountNumber: '', // Don't prefill — masked in API response
+      bankIfscCode: pg.bankIfscCode || '',
+      bankName: pg.bankName || '',
+      bankBranch: pg.bankBranch || '',
+      upiId: pg.upiId || '',
     });
     setEditOpen(true);
   };
@@ -266,6 +284,45 @@ export default function PGManagement() {
             </label>
           ))}
         </div>
+      </div>
+      {/* Bank Account Details (for payment settlement) */}
+      <div className="space-y-3 pt-2 border-t">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Landmark className="size-4" />
+          Bank Account Details (for payment settlement)
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Account Holder Name</Label>
+            <Input placeholder="Name as per bank records" value={form.bankAccountName} onChange={e => setForm(p => ({ ...p, bankAccountName: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Bank Name</Label>
+            <Input placeholder="e.g., State Bank of India" value={form.bankName} onChange={e => setForm(p => ({ ...p, bankName: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Account Number</Label>
+            <Input type="password" placeholder="Bank account number" value={form.bankAccountNumber} onChange={e => setForm(p => ({ ...p, bankAccountNumber: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>IFSC Code</Label>
+            <Input placeholder="e.g., SBIN0001234" value={form.bankIfscCode} onChange={e => setForm(p => ({ ...p, bankIfscCode: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Branch</Label>
+            <Input placeholder="Bank branch name" value={form.bankBranch} onChange={e => setForm(p => ({ ...p, bankBranch: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Wallet className="size-3.5" />
+              <Label>UPI ID</Label>
+            </div>
+            <Input placeholder="e.g., name@upi" value={form.upiId} onChange={e => setForm(p => ({ ...p, upiId: e.target.value }))} />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Tenant payments will be settled to this bank account. Your account number is securely stored and masked in the system.
+        </p>
       </div>
       <Button
         className="w-full bg-gradient-to-r from-brand-deep to-brand-teal hover:from-brand-deep hover:to-brand-teal text-white"

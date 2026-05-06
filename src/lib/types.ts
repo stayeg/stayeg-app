@@ -120,6 +120,13 @@ export interface PG {
   updatedAt?: string;
   owner?: User;
   rooms?: Room[];
+  // Bank account details for PG owners (payment settlement)
+  bankAccountName?: string;
+  bankAccountNumber?: string;
+  bankIfscCode?: string;
+  bankName?: string;
+  bankBranch?: string;
+  upiId?: string;
 }
 
 export interface Room {

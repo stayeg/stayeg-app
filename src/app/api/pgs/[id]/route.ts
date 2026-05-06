@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/lib/api-auth';
 
 export async function GET(
   request: NextRequest,
@@ -7,6 +8,20 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+
+    // Check if user is authenticated (to decide on masking bank details)
+    let isAuthenticatedOwner = false;
+    try {
+      const authHeader = request.headers.get('authorization');
+      if (authHeader) {
+        const authResult = await requireSession(request);
+        if (!('error' in authResult)) {
+          isAuthenticatedOwner = true;
+        }
+      }
+    } catch {
+      // Not authenticated — that's fine for public PG data
+    }
 
     const { data: pg, error } = await supabaseAdmin
       .from('pgs')
@@ -37,10 +52,22 @@ export async function GET(
         beds: (room.beds || []).sort((a: any, b: any) => a.bed_number - b.bed_number),
       }));
 
+    // Mask bank account number for security
+    const maskedBankAccount = pg.bank_account_number
+      ? `****${pg.bank_account_number.slice(-4)}`
+      : null;
+
     const formatted = {
       ...pg,
       images: pg.images ? pg.images.split(',').filter(Boolean) : [],
       amenities: pg.amenities ? pg.amenities.split(',').filter(Boolean) : [],
+      bank_account_number: maskedBankAccount,
+      bankAccountNumber: maskedBankAccount,
+      bankAccountName: pg.bank_account_name,
+      bankIfscCode: pg.bank_ifsc_code,
+      bankName: pg.bank_name,
+      bankBranch: pg.bank_branch,
+      upiId: pg.upi_id,
       rooms: sortedRooms.map((room: any) => ({
         ...room,
         beds: room.beds.map((bed: any) => ({
