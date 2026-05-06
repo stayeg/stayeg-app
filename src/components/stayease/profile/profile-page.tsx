@@ -908,6 +908,145 @@ export default function ProfilePage() {
           </Card>
         </motion.div>
 
+        {/* Bank Account Details Section (Owner only) */}
+        {currentUser?.role === 'OWNER' && (
+          <motion.div custom={5} variants={sectionVariants} initial="hidden" animate="visible">
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-4">
+                <div className="flex items-center gap-2">
+                  <div className="size-9 bg-brand-teal/15 rounded-lg flex items-center justify-center">
+                    <CreditCard className="size-5 text-brand-teal" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-lg">Bank Account Details</CardTitle>
+                    <CardDescription>Payment settlement account for rent collection</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {!isEditingProfile && (currentUser as any)?.bankAccountNumber ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-3 bg-muted rounded-lg">
+                        <p className="text-xs text-muted-foreground">Account Holder</p>
+                        <p className="text-sm font-medium text-foreground">{(currentUser as any).accountHolderName || currentUser.name}</p>
+                      </div>
+                      <div className="p-3 bg-muted rounded-lg">
+                        <p className="text-xs text-muted-foreground">Bank Name</p>
+                        <p className="text-sm font-medium text-foreground">{(currentUser as any).bankName || 'Not set'}</p>
+                      </div>
+                      <div className="p-3 bg-muted rounded-lg">
+                        <p className="text-xs text-muted-foreground">Account Number</p>
+                        <p className="text-sm font-medium text-foreground font-mono">
+                          ****{(currentUser as any).bankAccountNumber?.slice(-4) || '----'}
+                        </p>
+                      </div>
+                      <div className="p-3 bg-muted rounded-lg">
+                        <p className="text-xs text-muted-foreground">IFSC Code</p>
+                        <p className="text-sm font-medium text-foreground font-mono">{(currentUser as any).bankIfsc || 'Not set'}</p>
+                      </div>
+                      <div className="p-3 bg-muted rounded-lg sm:col-span-2">
+                        <p className="text-xs text-muted-foreground">UPI ID</p>
+                        <p className="text-sm font-medium text-foreground">{(currentUser as any).upiId || 'Not set'}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Rent payments from tenants will be settled to this bank account. Contact admin to update.
+                    </p>
+                  </div>
+                ) : isEditingProfile ? (
+                  <div className="space-y-4">
+                    <div className="p-3 bg-brand-teal/5 border border-brand-teal/20 rounded-lg">
+                      <p className="text-sm text-brand-teal">
+                        Enter your bank account details where tenant rent payments will be settled.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="bank-holder" className="text-sm font-medium text-muted-foreground">
+                          Account Holder Name
+                        </Label>
+                        <Input
+                          id="bank-holder"
+                          value={(currentUser as any).accountHolderName || ''}
+                          onChange={(e) => setCurrentUser({ ...currentUser, accountHolderName: e.target.value } as any)}
+                          placeholder="Name as per bank records"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="bank-name" className="text-sm font-medium text-muted-foreground">
+                          Bank Name
+                        </Label>
+                        <Input
+                          id="bank-name"
+                          value={(currentUser as any).bankName || ''}
+                          onChange={(e) => setCurrentUser({ ...currentUser, bankName: e.target.value } as any)}
+                          placeholder="e.g. State Bank of India"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="bank-account" className="text-sm font-medium text-muted-foreground">
+                          Account Number
+                        </Label>
+                        <Input
+                          id="bank-account"
+                          value={(currentUser as any).bankAccountNumber || ''}
+                          onChange={(e) => setCurrentUser({ ...currentUser, bankAccountNumber: e.target.value.replace(/\D/g, '') } as any)}
+                          placeholder="Enter account number"
+                          maxLength={18}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="bank-ifsc" className="text-sm font-medium text-muted-foreground">
+                          IFSC Code
+                        </Label>
+                        <Input
+                          id="bank-ifsc"
+                          value={(currentUser as any).bankIfsc || ''}
+                          onChange={(e) => setCurrentUser({ ...currentUser, bankIfsc: e.target.value.toUpperCase().slice(0, 11) } as any)}
+                          placeholder="e.g. SBIN0001234"
+                          maxLength={11}
+                          className="uppercase"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="bank-upi" className="text-sm font-medium text-muted-foreground">
+                          UPI ID (Optional)
+                        </Label>
+                        <Input
+                          id="bank-upi"
+                          value={(currentUser as any).upiId || ''}
+                          onChange={(e) => setCurrentUser({ ...currentUser, upiId: e.target.value } as any)}
+                          placeholder="e.g. name@upi"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <div className="size-16 bg-brand-teal/10 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <CreditCard className="size-8 text-brand-teal" />
+                    </div>
+                    <h3 className="font-semibold text-foreground mb-1">No Bank Account Added</h3>
+                    <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                      Add your bank account details to receive rent payments directly from tenants.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-4 gap-1.5 border-brand-teal/20 text-brand-teal hover:bg-brand-teal/10"
+                      onClick={() => setIsEditingProfile(true)}
+                    >
+                      <Edit3 className="size-3.5" />
+                      Add Bank Details
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
         {/* Account Settings Section */}
         <motion.div custom={5} variants={sectionVariants} initial="hidden" animate="visible">
           <Card className="border-0 shadow-sm">

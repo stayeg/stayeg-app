@@ -89,6 +89,12 @@ export interface User {
   occupation?: string;
   aadhaarNumber?: string;
   panNumber?: string;
+  // Bank account details for PG owners (payment settlement)
+  bankAccountNumber?: string;
+  bankIfsc?: string;
+  bankName?: string;
+  accountHolderName?: string;
+  upiId?: string;
   createdAt?: string;
 }
 

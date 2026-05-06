@@ -73,58 +73,95 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prevent double booking: check if bed is already occupied
-    const { data: existingBed, error: bedCheckError } = await supabaseAdmin
-      .from('beds')
-      .select('status')
-      .eq('id', bedId)
-      .single();
+    // SECURITY FIX (v3): Use atomic RPC function to prevent race conditions
+    // The create_booking_atomic function checks bed availability, checks for
+    // existing active bookings, creates the booking, AND marks the bed as
+    // OCCUPIED — all in a single database transaction with row-level locking.
+    const { data: rpcResult, error: rpcError } = await supabaseAdmin
+      .rpc('create_booking_atomic', {
+        p_user_id: userId,
+        p_pg_id: pgId,
+        p_bed_id: bedId,
+        p_check_in_date: new Date(checkInDate).toISOString(),
+        p_advance_paid: advancePaid || 0,
+      });
 
-    if (bedCheckError) throw bedCheckError;
+    if (rpcError) {
+      console.error('Booking RPC error:', rpcError.message);
+      // Fallback to non-atomic approach if RPC function doesn't exist yet
+      console.warn('Falling back to non-atomic booking (RPC function may not exist)');
 
-    if (existingBed && existingBed.status === 'OCCUPIED') {
-      return NextResponse.json(
-        { error: 'This bed is already booked. Please select another bed.' },
-        { status: 409 }
-      );
+      // Legacy non-atomic path (for DBs without the atomic function)
+      const { data: existingBed, error: bedCheckError } = await supabaseAdmin
+        .from('beds')
+        .select('status')
+        .eq('id', bedId)
+        .single();
+
+      if (bedCheckError) throw bedCheckError;
+
+      if (existingBed && existingBed.status === 'OCCUPIED') {
+        return NextResponse.json(
+          { error: 'This bed is already booked. Please select another bed.' },
+          { status: 409 }
+        );
+      }
+
+      const { data: activeBooking, error: activeCheckError } = await supabaseAdmin
+        .from('bookings')
+        .select('id')
+        .eq('bed_id', bedId)
+        .in('status', ['PENDING', 'CONFIRMED', 'ACTIVE'])
+        .maybeSingle();
+
+      if (activeCheckError) throw activeCheckError;
+
+      if (activeBooking) {
+        return NextResponse.json(
+          { error: 'This bed already has an active booking. Please select another bed.' },
+          { status: 409 }
+        );
+      }
+
+      const { data: booking, error: bookingError } = await supabaseAdmin
+        .from('bookings')
+        .insert({
+          user_id: userId,
+          pg_id: pgId,
+          bed_id: bedId,
+          check_in_date: new Date(checkInDate).toISOString(),
+          advance_paid: advancePaid || 0,
+        })
+        .select('*, pg:pgs(name), bed:beds(*)')
+        .single();
+
+      if (bookingError) throw bookingError;
+
+      await supabaseAdmin.from('beds').update({ status: 'OCCUPIED' }).eq('id', bedId);
+
+      return NextResponse.json(booking, { status: 201 });
     }
 
-    // Check for any active booking on this bed
-    const { data: activeBooking, error: activeCheckError } = await supabaseAdmin
-      .from('bookings')
-      .select('id')
-      .eq('bed_id', bedId)
-      .in('status', ['PENDING', 'CONFIRMED', 'ACTIVE'])
-      .maybeSingle();
-
-    if (activeCheckError) throw activeCheckError;
-
-    if (activeBooking) {
-      return NextResponse.json(
-        { error: 'This bed already has an active booking. Please select another bed.' },
-        { status: 409 }
-      );
+    // Atomic RPC succeeded
+    const result = rpcResult as any;
+    if (result.error) {
+      const status = result.code === 'BED_NOT_FOUND' ? 404 : 409;
+      return NextResponse.json({ error: result.error, code: result.code }, { status });
     }
 
-    // Create booking first
-    const { data: booking, error: bookingError } = await supabaseAdmin
+    // Fetch the full booking with relations for the response
+    const { data: fullBooking, error: fetchError } = await supabaseAdmin
       .from('bookings')
-      .insert({
-        user_id: userId,
-        pg_id: pgId,
-        bed_id: bedId,
-        check_in_date: new Date(checkInDate).toISOString(),
-        advance_paid: advancePaid || 0,
-      })
       .select('*, pg:pgs(name), bed:beds(*)')
+      .eq('id', result.booking.id)
       .single();
 
-    if (bookingError) throw bookingError;
+    if (fetchError || !fullBooking) {
+      // Booking was created but we couldn't fetch the full details
+      return NextResponse.json(result.booking, { status: 201 });
+    }
 
-    // Then update bed status
-    await supabaseAdmin.from('beds').update({ status: 'OCCUPIED' }).eq('id', bedId);
-
-    return NextResponse.json(booking, { status: 201 });
+    return NextResponse.json(fullBooking, { status: 201 });
   } catch (error) {
     console.error('Error creating booking:', error);
     return NextResponse.json({ error: 'Failed to create booking' }, { status: 500 });

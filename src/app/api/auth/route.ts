@@ -19,7 +19,7 @@ import { hashPassword, verifyPassword } from '@/lib/password';
 import { signToken } from '@/lib/jwt';
 
 // Safe user fields — NEVER include password_hash in API responses
-const SAFE_USER_FIELDS = 'id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at';
+const SAFE_USER_FIELDS = 'id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,bank_account_number,bank_ifsc,bank_name,account_holder_name,upi_id';
 
 // ============================
 // GET — Admin user list / PG tenants (NO LOGIN)
@@ -247,7 +247,7 @@ export async function PUT(request: NextRequest) {
 
     // Build update object — only include fields that are provided
     const updates: Record<string, unknown> = {};
-    const allowedFields = ['name', 'phone', 'gender', 'city', 'occupation', 'bio', 'avatar', 'aadhaar_number', 'pan_number', 'kyc_status'];
+    const allowedFields = ['name', 'phone', 'gender', 'city', 'occupation', 'bio', 'avatar', 'aadhaar_number', 'pan_number', 'kyc_status', 'bank_account_number', 'bank_ifsc', 'bank_name', 'account_holder_name', 'upi_id'];
 
     for (const field of allowedFields) {
       const snakeField = field.replace(/([A-Z])/g, '_$1').toLowerCase();
@@ -288,7 +288,7 @@ export async function PUT(request: NextRequest) {
       .from('users')
       .update(updates)
       .eq('id', userId)
-      .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,aadhaar_number,pan_number,kyc_status,created_at,updated_at')
+      .select('id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,aadhaar_number,pan_number,kyc_status,bank_account_number,bank_ifsc,bank_name,account_holder_name,upi_id,created_at,updated_at')
       .single();
 
     if (error) {
