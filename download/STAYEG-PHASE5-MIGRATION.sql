@@ -1,31 +1,29 @@
 -- =============================================================
--- StayEg — Phase 5 Production Hardening Migration
+-- StayEg — Phase 5 Production Hardening Migration (v3 - Fixed)
 -- =============================================================
 -- Run this in Supabase Dashboard > SQL Editor > New Query
 --
--- ASSUMES: STAYEG-PRODUCTION-SETUP.sql has already been run
---          (tables, RLS, indexes, triggers, seed data exist)
+-- ASSUMES: PRODUCTION SETUP + Phase 2 have already been run
 --
--- This migration ONLY adds what's MISSING:
---   1. Missing tables (reports, contact_submissions, review_helpful_votes)
---   2. RLS for new tables + webhook_events
---   3. Additional CHECK constraints not in original setup
---   4. Cross-table validation triggers
---   5. Auto-release bed on booking cancel/complete
---   6. Auto-notification triggers
---   7. Auto activity-log triggers
---   8. Additional performance indexes
---   9. Atomic RPC functions
---  10. Soft delete support (MUST come before dashboard views)
---  11. Dashboard views (depends on deleted_at columns)
---  12. Monetary field migration (DOUBLE PRECISION -> NUMERIC)
---  13. DB validation functions
+-- DEPENDENCY ORDER (CRITICAL):
+--   1.  Missing tables
+--   2.  RLS for new tables
+--   3.  CHECK constraints
+--   4.  Validation triggers
+--   5.  Auto-release bed trigger
+--   6.  Auto-notification triggers
+--   7.  Activity-log triggers
+--   8.  Performance indexes
+--   9.  Atomic RPC functions
+--  10.  Soft delete columns (views reference deleted_at)
+--  11.  Monetary field migration (views reference amount/price)
+--  12.  Dashboard views (must come AFTER soft delete + monetary)
+--  13.  Validation functions
 -- =============================================================
 
 -- =============================================================
 -- PART 1: Missing Tables
 -- =============================================================
--- These tables are referenced by API routes but don't exist yet.
 
 CREATE TABLE IF NOT EXISTS reports (
   id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -91,7 +89,6 @@ CREATE POLICY "review_helpful_votes_select_public" ON review_helpful_votes FOR S
 CREATE POLICY "review_helpful_votes_insert_service" ON review_helpful_votes FOR INSERT WITH CHECK (auth.role() = 'service_role');
 CREATE POLICY "review_helpful_votes_delete_service" ON review_helpful_votes FOR DELETE USING (auth.role() = 'service_role');
 
--- webhook_events was missing RLS (if table exists)
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'webhook_events') THEN
@@ -106,9 +103,7 @@ $$;
 -- =============================================================
 -- PART 3: Additional Data Integrity Constraints
 -- =============================================================
--- Only adding constraints NOT already in the PRODUCTION SETUP.
 
--- 3a. Price/amount validation (production setup doesn't have these)
 ALTER TABLE pgs ADD CONSTRAINT pgs_price_positive CHECK (price >= 0);
 ALTER TABLE pgs ADD CONSTRAINT pgs_security_deposit_positive CHECK (security_deposit >= 0);
 ALTER TABLE pgs ADD CONSTRAINT pgs_rating_range CHECK (rating >= 0 AND rating <= 5);
@@ -119,15 +114,12 @@ ALTER TABLE coupons ADD CONSTRAINT coupons_discount_value_positive CHECK (discou
 ALTER TABLE rooms ADD CONSTRAINT rooms_floor_positive CHECK (floor >= 0);
 ALTER TABLE beds ADD CONSTRAINT beds_bed_number_positive CHECK (bed_number > 0);
 
--- 3b. Unique phone (race condition prevention)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE phone IS NOT NULL;
 
--- 3c. Expand payments.method to include online/Razorpay methods
 ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_method_check;
 ALTER TABLE payments ADD CONSTRAINT payments_method_check
   CHECK (method IN ('UPI', 'CARD', 'NET_BANKING', 'CASH', 'RAZORPAY', 'ONLINE') OR method IS NULL);
 
--- 3d. Add updated_at trigger on reports
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -145,71 +137,58 @@ CREATE TRIGGER tr_reports_uat BEFORE UPDATE ON reports
 -- PART 4: Cross-Table Validation Triggers
 -- =============================================================
 
--- 4a. Ensure booking.pg_id matches the bed's PG (via room -> pg)
 CREATE OR REPLACE FUNCTION validate_booking_pg_match()
 RETURNS TRIGGER AS $$
 DECLARE
   v_bed_pg_id TEXT;
 BEGIN
   SELECT r.pg_id INTO v_bed_pg_id
-  FROM beds b
-  JOIN rooms r ON r.id = b.room_id
+  FROM beds b JOIN rooms r ON r.id = b.room_id
   WHERE b.id = NEW.bed_id;
-
   IF v_bed_pg_id IS NULL THEN
     RAISE EXCEPTION 'Referenced bed does not exist or has no room';
   END IF;
-
   IF NEW.pg_id != v_bed_pg_id THEN
     RAISE EXCEPTION 'Booking pg_id (%) does not match the bed''s PG (%)', NEW.pg_id, v_bed_pg_id;
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_validate_booking_pg ON bookings;
 CREATE TRIGGER trg_validate_booking_pg
-  BEFORE INSERT ON bookings
-  FOR EACH ROW
+  BEFORE INSERT ON bookings FOR EACH ROW
   EXECUTE FUNCTION validate_booking_pg_match();
 
-
--- 4b. Prevent booking a bed that is already OCCUPIED
 CREATE OR REPLACE FUNCTION prevent_double_booking()
 RETURNS TRIGGER AS $$
 DECLARE
   v_bed_status TEXT;
 BEGIN
   SELECT status INTO v_bed_status FROM beds WHERE id = NEW.bed_id;
-
   IF v_bed_status != 'AVAILABLE' THEN
     RAISE EXCEPTION 'Bed % is not available (status: %)', NEW.bed_id, v_bed_status;
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_prevent_double_booking ON bookings;
 CREATE TRIGGER trg_prevent_double_booking
-  BEFORE INSERT ON bookings
-  FOR EACH ROW
+  BEFORE INSERT ON bookings FOR EACH ROW
   WHEN (NEW.status IN ('PENDING', 'CONFIRMED', 'ACTIVE'))
   EXECUTE FUNCTION prevent_double_booking();
 
 
 -- =============================================================
--- PART 5: Auto-Release Bed on Booking Cancellation/Completion
+-- PART 5: Auto-Release Bed
 -- =============================================================
 
 CREATE OR REPLACE FUNCTION auto_release_bed()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF NEW.status IN ('CANCELLED', 'COMPLETED')
-     AND OLD.status NOT IN ('CANCELLED', 'COMPLETED') THEN
-    UPDATE beds SET status = 'AVAILABLE'
-    WHERE id = NEW.bed_id AND status = 'OCCUPIED';
+  IF NEW.status IN ('CANCELLED', 'COMPLETED') AND OLD.status NOT IN ('CANCELLED', 'COMPLETED') THEN
+    UPDATE beds SET status = 'AVAILABLE' WHERE id = NEW.bed_id AND status = 'OCCUPIED';
   END IF;
   RETURN NEW;
 END;
@@ -217,8 +196,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_auto_release_bed ON bookings;
 CREATE TRIGGER trg_auto_release_bed
-  AFTER UPDATE ON bookings
-  FOR EACH ROW
+  AFTER UPDATE ON bookings FOR EACH ROW
   EXECUTE FUNCTION auto_release_bed();
 
 
@@ -226,162 +204,112 @@ CREATE TRIGGER trg_auto_release_bed
 -- PART 6: Auto-Notification Triggers
 -- =============================================================
 
--- Helper: get PG owner from pg_id
 CREATE OR REPLACE FUNCTION get_pg_owner(p_pg_id TEXT)
 RETURNS TEXT AS $$
   SELECT owner_id FROM pgs WHERE id = p_pg_id;
 $$ LANGUAGE sql STABLE;
 
--- 6a. New booking -> notify PG owner
 CREATE OR REPLACE FUNCTION notify_owner_new_booking()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
-  v_pg_name TEXT;
-  v_user_name TEXT;
+DECLARE v_owner_id TEXT; v_pg_name TEXT; v_user_name TEXT;
 BEGIN
   SELECT owner_id, name INTO v_owner_id, v_pg_name FROM pgs WHERE id = NEW.pg_id;
   SELECT name INTO v_user_name FROM users WHERE id = NEW.user_id;
-
   IF v_owner_id IS NOT NULL THEN
-    INSERT INTO notifications (user_id, title, message, type, data)
-    VALUES (
-      v_owner_id,
-      'New Booking',
+    INSERT INTO notifications (user_id, title, message, type, data) VALUES (
+      v_owner_id, 'New Booking',
       COALESCE(v_user_name, 'A tenant') || ' booked a bed at ' || COALESCE(v_pg_name, 'your PG'),
-      'BOOKING',
-      jsonb_build_object('booking_id', NEW.id, 'pg_id', NEW.pg_id, 'user_id', NEW.user_id)
+      'BOOKING', jsonb_build_object('booking_id', NEW.id, 'pg_id', NEW.pg_id, 'user_id', NEW.user_id)
     );
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_notify_owner_booking ON bookings;
-CREATE TRIGGER trg_notify_owner_booking
-  AFTER INSERT ON bookings
-  FOR EACH ROW
+CREATE TRIGGER trg_notify_owner_booking AFTER INSERT ON bookings FOR EACH ROW
   EXECUTE FUNCTION notify_owner_new_booking();
 
--- 6b. Booking status change -> notify tenant
 CREATE OR REPLACE FUNCTION notify_tenant_booking_update()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_pg_name TEXT;
+DECLARE v_pg_name TEXT;
 BEGIN
   IF NEW.status != OLD.status THEN
     SELECT name INTO v_pg_name FROM pgs WHERE id = NEW.pg_id;
-
-    INSERT INTO notifications (user_id, title, message, type, data)
-    VALUES (
-      NEW.user_id,
-      'Booking ' || NEW.status,
+    INSERT INTO notifications (user_id, title, message, type, data) VALUES (
+      NEW.user_id, 'Booking ' || NEW.status,
       'Your booking at ' || COALESCE(v_pg_name, 'PG') || ' has been ' || LOWER(NEW.status),
-      'BOOKING',
-      jsonb_build_object('booking_id', NEW.id, 'status', NEW.status, 'pg_id', NEW.pg_id)
+      'BOOKING', jsonb_build_object('booking_id', NEW.id, 'status', NEW.status, 'pg_id', NEW.pg_id)
     );
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_notify_tenant_booking_update ON bookings;
-CREATE TRIGGER trg_notify_tenant_booking_update
-  AFTER UPDATE ON bookings
-  FOR EACH ROW
+CREATE TRIGGER trg_notify_tenant_booking_update AFTER UPDATE ON bookings FOR EACH ROW
   EXECUTE FUNCTION notify_tenant_booking_update();
 
--- 6c. New complaint -> notify PG owner
 CREATE OR REPLACE FUNCTION notify_owner_new_complaint()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
-  v_pg_name TEXT;
-  v_user_name TEXT;
+DECLARE v_owner_id TEXT; v_pg_name TEXT; v_user_name TEXT;
 BEGIN
   SELECT owner_id, name INTO v_owner_id, v_pg_name FROM pgs WHERE id = NEW.pg_id;
   SELECT name INTO v_user_name FROM users WHERE id = NEW.user_id;
-
   IF v_owner_id IS NOT NULL THEN
-    INSERT INTO notifications (user_id, title, message, type, data)
-    VALUES (
-      v_owner_id,
-      'New Complaint: ' || NEW.title,
+    INSERT INTO notifications (user_id, title, message, type, data) VALUES (
+      v_owner_id, 'New Complaint: ' || NEW.title,
       COALESCE(v_user_name, 'A tenant') || ' filed a complaint at ' || COALESCE(v_pg_name, 'your PG'),
-      'COMPLAINT',
-      jsonb_build_object('complaint_id', NEW.id, 'pg_id', NEW.pg_id, 'priority', NEW.priority)
+      'COMPLAINT', jsonb_build_object('complaint_id', NEW.id, 'pg_id', NEW.pg_id, 'priority', NEW.priority)
     );
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_notify_owner_complaint ON complaints;
-CREATE TRIGGER trg_notify_owner_complaint
-  AFTER INSERT ON complaints
-  FOR EACH ROW
+CREATE TRIGGER trg_notify_owner_complaint AFTER INSERT ON complaints FOR EACH ROW
   EXECUTE FUNCTION notify_owner_new_complaint();
 
--- 6d. Complaint resolved -> notify tenant
 CREATE OR REPLACE FUNCTION notify_tenant_complaint_resolved()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.status IN ('RESOLVED', 'CLOSED') AND OLD.status NOT IN ('RESOLVED', 'CLOSED') THEN
-    INSERT INTO notifications (user_id, title, message, type, data)
-    VALUES (
-      NEW.user_id,
-      'Complaint Resolved',
+    INSERT INTO notifications (user_id, title, message, type, data) VALUES (
+      NEW.user_id, 'Complaint Resolved',
       'Your complaint "' || NEW.title || '" has been resolved.',
-      'COMPLAINT',
-      jsonb_build_object('complaint_id', NEW.id, 'status', NEW.status)
+      'COMPLAINT', jsonb_build_object('complaint_id', NEW.id, 'status', NEW.status)
     );
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_notify_tenant_complaint_resolved ON complaints;
-CREATE TRIGGER trg_notify_tenant_complaint_resolved
-  AFTER UPDATE ON complaints
-  FOR EACH ROW
+CREATE TRIGGER trg_notify_tenant_complaint_resolved AFTER UPDATE ON complaints FOR EACH ROW
   EXECUTE FUNCTION notify_tenant_complaint_resolved();
 
--- 6e. Payment completed -> notify PG owner
 CREATE OR REPLACE FUNCTION notify_owner_payment_received()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
-  v_pg_name TEXT;
-  v_user_name TEXT;
+DECLARE v_owner_id TEXT; v_pg_name TEXT; v_user_name TEXT;
 BEGIN
   IF NEW.status = 'COMPLETED' AND (OLD.status IS NULL OR OLD.status != 'COMPLETED') THEN
     SELECT owner_id, name INTO v_owner_id, v_pg_name FROM pgs WHERE id = NEW.pg_id;
     SELECT name INTO v_user_name FROM users WHERE id = NEW.user_id;
-
     IF v_owner_id IS NOT NULL THEN
-      INSERT INTO notifications (user_id, title, message, type, data)
-      VALUES (
-        v_owner_id,
-        'Payment Received',
+      INSERT INTO notifications (user_id, title, message, type, data) VALUES (
+        v_owner_id, 'Payment Received',
         COALESCE(v_user_name, 'A tenant') || ' paid ' || NEW.amount || ' at ' || COALESCE(v_pg_name, 'your PG'),
-        'PAYMENT',
-        jsonb_build_object('payment_id', NEW.id, 'amount', NEW.amount, 'pg_id', NEW.pg_id)
+        'PAYMENT', jsonb_build_object('payment_id', NEW.id, 'amount', NEW.amount, 'pg_id', NEW.pg_id)
       );
     END IF;
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_notify_owner_payment ON payments;
-CREATE TRIGGER trg_notify_owner_payment
-  AFTER UPDATE ON payments
-  FOR EACH ROW
+CREATE TRIGGER trg_notify_owner_payment AFTER UPDATE ON payments FOR EACH ROW
   EXECUTE FUNCTION notify_owner_payment_received();
 
 
@@ -389,155 +317,102 @@ CREATE TRIGGER trg_notify_owner_payment
 -- PART 7: Auto Activity-Log Triggers
 -- =============================================================
 
--- 7a. Log booking creation
 CREATE OR REPLACE FUNCTION log_booking_created()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
+DECLARE v_owner_id TEXT;
 BEGIN
   v_owner_id := get_pg_owner(NEW.pg_id);
-
   INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id)
   VALUES (v_owner_id, NEW.pg_id, 'BOOKING_CREATED', 'New booking created', 'booking', NEW.id);
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_log_booking_created ON bookings;
-CREATE TRIGGER trg_log_booking_created
-  AFTER INSERT ON bookings FOR EACH ROW
+CREATE TRIGGER trg_log_booking_created AFTER INSERT ON bookings FOR EACH ROW
   EXECUTE FUNCTION log_booking_created();
 
--- 7b. Log booking status changes
 CREATE OR REPLACE FUNCTION log_booking_status_change()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
+DECLARE v_owner_id TEXT;
 BEGIN
   IF NEW.status != OLD.status THEN
     v_owner_id := get_pg_owner(NEW.pg_id);
-
-    INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id)
-    VALUES (
+    INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id) VALUES (
       v_owner_id, NEW.pg_id, 'BOOKING_' || NEW.status,
-      'Booking status changed from ' || OLD.status || ' to ' || NEW.status,
-      'booking', NEW.id
+      'Booking status changed from ' || OLD.status || ' to ' || NEW.status, 'booking', NEW.id
     );
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_log_booking_status ON bookings;
-CREATE TRIGGER trg_log_booking_status
-  AFTER UPDATE ON bookings FOR EACH ROW
+CREATE TRIGGER trg_log_booking_status AFTER UPDATE ON bookings FOR EACH ROW
   EXECUTE FUNCTION log_booking_status_change();
 
--- 7c. Log payment completion
 CREATE OR REPLACE FUNCTION log_payment_completed()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
+DECLARE v_owner_id TEXT;
 BEGIN
   IF NEW.status = 'COMPLETED' AND (OLD.status IS NULL OR OLD.status != 'COMPLETED') THEN
     v_owner_id := get_pg_owner(NEW.pg_id);
-
-    INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id)
-    VALUES (
-      v_owner_id, NEW.pg_id, 'PAYMENT_RECEIVED',
-      'Payment of ' || NEW.amount || ' received', 'payment', NEW.id
+    INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id) VALUES (
+      v_owner_id, NEW.pg_id, 'PAYMENT_RECEIVED', 'Payment of ' || NEW.amount || ' received', 'payment', NEW.id
     );
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_log_payment ON payments;
-CREATE TRIGGER trg_log_payment
-  AFTER UPDATE ON payments FOR EACH ROW
+CREATE TRIGGER trg_log_payment AFTER UPDATE ON payments FOR EACH ROW
   EXECUTE FUNCTION log_payment_completed();
 
--- 7d. Log review posted
 CREATE OR REPLACE FUNCTION log_review_posted()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_owner_id TEXT;
+DECLARE v_owner_id TEXT;
 BEGIN
   v_owner_id := get_pg_owner(NEW.pg_id);
-
-  INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id)
-  VALUES (
-    v_owner_id, NEW.pg_id, 'REVIEW_POSTED',
-    'New review posted with rating ' || NEW.rating, 'review', NEW.id
+  INSERT INTO activity_log (owner_id, pg_id, action, details, entity_type, entity_id) VALUES (
+    v_owner_id, NEW.pg_id, 'REVIEW_POSTED', 'New review posted with rating ' || NEW.rating, 'review', NEW.id
   );
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_log_review ON reviews;
-CREATE TRIGGER trg_log_review
-  AFTER INSERT ON reviews FOR EACH ROW
+CREATE TRIGGER trg_log_review AFTER INSERT ON reviews FOR EACH ROW
   EXECUTE FUNCTION log_review_posted();
 
 
 -- =============================================================
 -- PART 8: Additional Performance Indexes
 -- =============================================================
--- Production setup already has basic indexes.
--- These are ADDITIONAL indexes for analytics and search.
 
--- Compound indexes for analytics
 CREATE INDEX IF NOT EXISTS idx_payments_pg_status ON payments(pg_id, status);
 CREATE INDEX IF NOT EXISTS idx_payments_pg_type_status ON payments(pg_id, type, status);
 CREATE INDEX IF NOT EXISTS idx_payments_pg_created ON payments(pg_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_booking ON payments(booking_id);
-
--- Booking lookup patterns
 CREATE INDEX IF NOT EXISTS idx_bookings_user_status ON bookings(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_pg_status ON bookings(pg_id, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_bed_status ON bookings(bed_id, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_check_in ON bookings(check_in_date);
-
--- Complaint management
 CREATE INDEX IF NOT EXISTS idx_complaints_pg_status ON complaints(pg_id, status);
 CREATE INDEX IF NOT EXISTS idx_complaints_user ON complaints(user_id);
-
--- Bed availability
 CREATE INDEX IF NOT EXISTS idx_beds_room_status ON beds(room_id, status);
-
--- Activity log entity lookup + owner dashboard
 CREATE INDEX IF NOT EXISTS idx_activity_log_owner_created ON activity_log(owner_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity_type, entity_id);
-
--- Notification queries
 CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
-
--- Review moderation
 CREATE INDEX IF NOT EXISTS idx_reviews_flagged ON reviews(is_flagged) WHERE is_flagged = true;
 CREATE INDEX IF NOT EXISTS idx_reviews_pg_rating ON reviews(pg_id, rating DESC);
-
--- Overdue payment detection (partial index)
 CREATE INDEX IF NOT EXISTS idx_payments_status_due ON payments(status, due_date) WHERE status = 'PENDING';
-
--- PG text search (trigram)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_pgs_name_trgm ON pgs USING gin (name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_pgs_address_trgm ON pgs USING gin (address gin_trgm_ops);
-
--- Geographic index for location-based PG search
 CREATE INDEX IF NOT EXISTS idx_pgs_lat_lng ON pgs(lat, lng) WHERE lat IS NOT NULL AND lng IS NOT NULL;
-
--- PG amenities text search
 CREATE INDEX IF NOT EXISTS idx_pgs_amenities_trgm ON pgs USING gin (amenities gin_trgm_ops);
-
--- PG city + status
 CREATE INDEX IF NOT EXISTS idx_pgs_city_status ON pgs(city, status);
-
--- Tenant notes by tenant
 CREATE INDEX IF NOT EXISTS idx_tenant_notes_tenant ON tenant_notes(tenant_id);
 
 
@@ -545,211 +420,82 @@ CREATE INDEX IF NOT EXISTS idx_tenant_notes_tenant ON tenant_notes(tenant_id);
 -- PART 9: Atomic RPC Functions
 -- =============================================================
 
--- 9a. Cancel booking atomically
-CREATE OR REPLACE FUNCTION cancel_booking_atomic(
-  p_booking_id TEXT,
-  p_user_id TEXT
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_booking RECORD;
+CREATE OR REPLACE FUNCTION cancel_booking_atomic(p_booking_id TEXT, p_user_id TEXT)
+RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE v_booking RECORD;
 BEGIN
-  SELECT * INTO v_booking
-  FROM bookings
-  WHERE id = p_booking_id AND user_id = p_user_id
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('error', 'Booking not found', 'code', 'NOT_FOUND');
-  END IF;
-
+  SELECT * INTO v_booking FROM bookings WHERE id = p_booking_id AND user_id = p_user_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'Booking not found', 'code', 'NOT_FOUND'); END IF;
   IF v_booking.status IN ('CANCELLED', 'COMPLETED') THEN
     RETURN jsonb_build_object('error', 'Booking already ' || v_booking.status, 'code', 'ALREADY_DONE');
   END IF;
-
   UPDATE bookings SET status = 'CANCELLED' WHERE id = p_booking_id;
-
-  UPDATE beds SET status = 'AVAILABLE'
-  WHERE id = v_booking.bed_id AND status = 'OCCUPIED';
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'booking_id', p_booking_id,
-    'status', 'CANCELLED'
-  );
+  UPDATE beds SET status = 'AVAILABLE' WHERE id = v_booking.bed_id AND status = 'OCCUPIED';
+  RETURN jsonb_build_object('success', true, 'booking_id', p_booking_id, 'status', 'CANCELLED');
 END;
 $$;
 
-
--- 9b. Transfer bed atomically
-CREATE OR REPLACE FUNCTION transfer_bed_atomic(
-  p_booking_id TEXT,
-  p_new_bed_id TEXT,
-  p_new_pg_id TEXT
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_booking RECORD;
-  v_old_bed_id TEXT;
-  v_new_bed_status TEXT;
+CREATE OR REPLACE FUNCTION transfer_bed_atomic(p_booking_id TEXT, p_new_bed_id TEXT, p_new_pg_id TEXT)
+RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE v_booking RECORD; v_old_bed_id TEXT; v_new_bed_status TEXT;
 BEGIN
-  SELECT * INTO v_booking
-  FROM bookings
-  WHERE id = p_booking_id AND status IN ('CONFIRMED', 'ACTIVE')
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('error', 'Active booking not found', 'code', 'NOT_FOUND');
-  END IF;
-
+  SELECT * INTO v_booking FROM bookings WHERE id = p_booking_id AND status IN ('CONFIRMED', 'ACTIVE') FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'Active booking not found', 'code', 'NOT_FOUND'); END IF;
   v_old_bed_id := v_booking.bed_id;
-
-  SELECT status INTO v_new_bed_status
-  FROM beds WHERE id = p_new_bed_id FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('error', 'Target bed not found', 'code', 'BED_NOT_FOUND');
-  END IF;
-
-  IF v_new_bed_status != 'AVAILABLE' THEN
-    RETURN jsonb_build_object('error', 'Target bed is not available', 'code', 'BED_OCCUPIED');
-  END IF;
-
-  PERFORM 1
-  FROM beds b JOIN rooms r ON r.id = b.room_id
-  WHERE b.id = p_new_bed_id AND r.pg_id = p_new_pg_id;
-
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('error', 'Bed does not belong to the specified PG', 'code', 'PG_MISMATCH');
-  END IF;
-
+  SELECT status INTO v_new_bed_status FROM beds WHERE id = p_new_bed_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'Target bed not found', 'code', 'BED_NOT_FOUND'); END IF;
+  IF v_new_bed_status != 'AVAILABLE' THEN RETURN jsonb_build_object('error', 'Target bed is not available', 'code', 'BED_OCCUPIED'); END IF;
+  PERFORM 1 FROM beds b JOIN rooms r ON r.id = b.room_id WHERE b.id = p_new_bed_id AND r.pg_id = p_new_pg_id;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'Bed does not belong to the specified PG', 'code', 'PG_MISMATCH'); END IF;
   UPDATE beds SET status = 'AVAILABLE' WHERE id = v_old_bed_id;
   UPDATE beds SET status = 'OCCUPIED' WHERE id = p_new_bed_id;
   UPDATE bookings SET bed_id = p_new_bed_id, pg_id = p_new_pg_id WHERE id = p_booking_id;
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'booking_id', p_booking_id,
-    'old_bed_id', v_old_bed_id,
-    'new_bed_id', p_new_bed_id
-  );
+  RETURN jsonb_build_object('success', true, 'booking_id', p_booking_id, 'old_bed_id', v_old_bed_id, 'new_bed_id', p_new_bed_id);
 END;
 $$;
 
-
--- 9c. Apply coupon atomically
-CREATE OR REPLACE FUNCTION apply_coupon_atomic(
-  p_coupon_id TEXT,
-  p_user_id TEXT,
-  p_booking_id TEXT,
-  p_order_amount NUMERIC
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_coupon RECORD;
-  v_discount_amount NUMERIC;
-  v_already_used INTEGER;
+CREATE OR REPLACE FUNCTION apply_coupon_atomic(p_coupon_id TEXT, p_user_id TEXT, p_booking_id TEXT, p_order_amount NUMERIC)
+RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE v_coupon RECORD; v_discount_amount NUMERIC; v_already_used INTEGER;
 BEGIN
   SELECT * INTO v_coupon FROM coupons WHERE id = p_coupon_id FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('error', 'Coupon not found', 'code', 'NOT_FOUND');
-  END IF;
-
-  IF v_coupon.is_active = false THEN
-    RETURN jsonb_build_object('error', 'Coupon is not active', 'code', 'INACTIVE');
-  END IF;
-
-  IF NOW() < v_coupon.valid_from OR NOW() > v_coupon.valid_until THEN
-    RETURN jsonb_build_object('error', 'Coupon has expired or is not yet valid', 'code', 'EXPIRED');
-  END IF;
-
-  IF v_coupon.usage_limit IS NOT NULL AND v_coupon.used_count >= v_coupon.usage_limit THEN
-    RETURN jsonb_build_object('error', 'Coupon usage limit reached', 'code', 'LIMIT_REACHED');
-  END IF;
-
-  IF p_order_amount < v_coupon.min_order_amount THEN
-    RETURN jsonb_build_object('error', 'Order amount below minimum', 'code', 'BELOW_MINIMUM');
-  END IF;
-
-  SELECT COUNT(*) INTO v_already_used
-  FROM coupon_usages WHERE coupon_id = p_coupon_id AND user_id = p_user_id;
-
-  IF v_already_used > 0 THEN
-    RETURN jsonb_build_object('error', 'You have already used this coupon', 'code', 'ALREADY_USED');
-  END IF;
-
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'Coupon not found', 'code', 'NOT_FOUND'); END IF;
+  IF v_coupon.is_active = false THEN RETURN jsonb_build_object('error', 'Coupon is not active', 'code', 'INACTIVE'); END IF;
+  IF NOW() < v_coupon.valid_from OR NOW() > v_coupon.valid_until THEN RETURN jsonb_build_object('error', 'Coupon has expired or is not yet valid', 'code', 'EXPIRED'); END IF;
+  IF v_coupon.usage_limit IS NOT NULL AND v_coupon.used_count >= v_coupon.usage_limit THEN RETURN jsonb_build_object('error', 'Coupon usage limit reached', 'code', 'LIMIT_REACHED'); END IF;
+  IF p_order_amount < v_coupon.min_order_amount THEN RETURN jsonb_build_object('error', 'Order amount below minimum', 'code', 'BELOW_MINIMUM'); END IF;
+  SELECT COUNT(*) INTO v_already_used FROM coupon_usages WHERE coupon_id = p_coupon_id AND user_id = p_user_id;
+  IF v_already_used > 0 THEN RETURN jsonb_build_object('error', 'You have already used this coupon', 'code', 'ALREADY_USED'); END IF;
   IF v_coupon.discount_type = 'PERCENTAGE' THEN
-    v_discount_amount := LEAST(
-      (p_order_amount * v_coupon.discount_value / 100),
-      COALESCE(v_coupon.max_discount, p_order_amount)
-    );
+    v_discount_amount := LEAST((p_order_amount * v_coupon.discount_value / 100), COALESCE(v_coupon.max_discount, p_order_amount));
   ELSE
     v_discount_amount := LEAST(v_coupon.discount_value, p_order_amount);
   END IF;
-
-  INSERT INTO coupon_usages (coupon_id, user_id, booking_id, discount_amount)
-  VALUES (p_coupon_id, p_user_id, p_booking_id, v_discount_amount);
-
+  INSERT INTO coupon_usages (coupon_id, user_id, booking_id, discount_amount) VALUES (p_coupon_id, p_user_id, p_booking_id, v_discount_amount);
   UPDATE coupons SET used_count = used_count + 1 WHERE id = p_coupon_id;
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'discount_amount', v_discount_amount,
-    'final_amount', p_order_amount - v_discount_amount
-  );
+  RETURN jsonb_build_object('success', true, 'discount_amount', v_discount_amount, 'final_amount', p_order_amount - v_discount_amount);
 END;
 $$;
 
-
--- 9d. Generate monthly rent payment records
-CREATE OR REPLACE FUNCTION generate_monthly_rent(
-  p_month DATE DEFAULT date_trunc('month', CURRENT_DATE)::date
-)
-RETURNS INTEGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_count INTEGER := 0;
-  v_booking RECORD;
-  v_due_date TIMESTAMPTZ;
-  v_rent_amount NUMERIC;
+CREATE OR REPLACE FUNCTION generate_monthly_rent(p_month DATE DEFAULT date_trunc('month', CURRENT_DATE)::date)
+RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE v_count INTEGER := 0; v_booking RECORD; v_due_date TIMESTAMPTZ; v_rent_amount NUMERIC;
 BEGIN
   v_due_date := p_month + INTERVAL '5 days';
-
-  FOR v_booking IN
-    SELECT b.id AS booking_id, b.user_id, b.pg_id, bd.price AS rent_price
-    FROM bookings b JOIN beds bd ON bd.id = b.bed_id
-    WHERE b.status IN ('ACTIVE', 'CONFIRMED')
-  LOOP
-    IF NOT EXISTS (
-      SELECT 1 FROM payments
-      WHERE booking_id = v_booking.booking_id
-        AND type = 'RENT'
-        AND date_trunc('month', due_date) = date_trunc('month', v_due_date)
-    ) THEN
+  FOR v_booking IN SELECT b.id AS booking_id, b.user_id, b.pg_id, bd.price AS rent_price FROM bookings b JOIN beds bd ON bd.id = b.bed_id WHERE b.status IN ('ACTIVE', 'CONFIRMED') LOOP
+    IF NOT EXISTS (SELECT 1 FROM payments WHERE booking_id = v_booking.booking_id AND type = 'RENT' AND date_trunc('month', due_date) = date_trunc('month', v_due_date)) THEN
       v_rent_amount := COALESCE(v_booking.rent_price, 0);
-
-      INSERT INTO payments (user_id, pg_id, booking_id, amount, type, status, due_date, method)
-      VALUES (v_booking.user_id, v_booking.pg_id, v_booking.booking_id, v_rent_amount, 'RENT', 'PENDING', v_due_date, 'UPI');
-
+      INSERT INTO payments (user_id, pg_id, booking_id, amount, type, status, due_date, method) VALUES (v_booking.user_id, v_booking.pg_id, v_booking.booking_id, v_rent_amount, 'RENT', 'PENDING', v_due_date, 'UPI');
       v_count := v_count + 1;
     END IF;
   END LOOP;
-
   RETURN v_count;
 END;
 $$;
 
 
 -- =============================================================
--- PART 10: Soft Delete Support (MUST come before Dashboard Views)
+-- PART 10: Soft Delete Support (views reference deleted_at)
 -- =============================================================
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
@@ -768,31 +514,53 @@ CREATE INDEX IF NOT EXISTS idx_payments_active ON payments(id) WHERE deleted_at 
 
 
 -- =============================================================
--- PART 11: Dashboard Views (depends on deleted_at columns)
+-- PART 11: Monetary Field Migration (views reference these columns)
+-- =============================================================
+-- MUST come BEFORE dashboard views!
+-- Views reference: payments.amount, pgs.price, pgs.security_deposit,
+--                  beds.price, bookings.advance_paid
+
+ALTER TABLE payments ALTER COLUMN amount TYPE NUMERIC(12,2);
+ALTER TABLE pgs ALTER COLUMN price TYPE NUMERIC(12,2);
+ALTER TABLE pgs ALTER COLUMN security_deposit TYPE NUMERIC(12,2);
+ALTER TABLE beds ALTER COLUMN price TYPE NUMERIC(12,2);
+ALTER TABLE bookings ALTER COLUMN advance_paid TYPE NUMERIC(12,2);
+
+-- Update create_booking_atomic to use NUMERIC type
+CREATE OR REPLACE FUNCTION create_booking_atomic(
+  p_user_id TEXT, p_pg_id TEXT, p_bed_id TEXT, p_check_in_date TIMESTAMPTZ,
+  p_advance_paid NUMERIC(12,2) DEFAULT 0
+)
+RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE v_bed_status TEXT; v_existing_booking_id TEXT; v_booking_id TEXT;
+BEGIN
+  SELECT status INTO v_bed_status FROM beds WHERE id = p_bed_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'Bed not found', 'code', 'BED_NOT_FOUND'); END IF;
+  IF v_bed_status != 'AVAILABLE' THEN RETURN jsonb_build_object('error', 'This bed is already booked. Please select another bed.', 'code', 'BED_OCCUPIED'); END IF;
+  SELECT id INTO v_existing_booking_id FROM bookings WHERE bed_id = p_bed_id AND status IN ('PENDING', 'CONFIRMED', 'ACTIVE') FOR UPDATE;
+  IF v_existing_booking_id IS NOT NULL THEN RETURN jsonb_build_object('error', 'This bed already has an active booking.', 'code', 'BOOKING_EXISTS'); END IF;
+  INSERT INTO bookings (user_id, pg_id, bed_id, check_in_date, advance_paid, status)
+  VALUES (p_user_id, p_pg_id, p_bed_id, p_check_in_date, p_advance_paid, 'PENDING') RETURNING id INTO v_booking_id;
+  UPDATE beds SET status = 'OCCUPIED' WHERE id = p_bed_id;
+  RETURN jsonb_build_object('booking', jsonb_build_object('id', v_booking_id, 'user_id', p_user_id, 'pg_id', p_pg_id, 'bed_id', p_bed_id, 'status', 'PENDING'));
+END;
+$$;
+
+
+-- =============================================================
+-- PART 12: Dashboard Views (AFTER soft delete + monetary migration)
 -- =============================================================
 
--- 11a. Owner dashboard materialized view
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_owner_dashboard AS
 SELECT
-  p.owner_id,
-  p.id AS pg_id,
-  p.name AS pg_name,
-  p.city,
-  p.status AS pg_status,
+  p.owner_id, p.id AS pg_id, p.name AS pg_name, p.city, p.status AS pg_status,
   COUNT(DISTINCT r.id) AS total_rooms,
   COUNT(DISTINCT b.id) AS total_beds,
   COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'OCCUPIED') AS occupied_beds,
   COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'AVAILABLE') AS available_beds,
-  ROUND(
-    COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'OCCUPIED')::numeric
-    / NULLIF(COUNT(DISTINCT b.id), 0) * 100, 1
-  ) AS occupancy_pct,
-  COALESCE(SUM(pay.amount) FILTER (
-    WHERE pay.status = 'COMPLETED' AND pay.created_at >= date_trunc('month', NOW())
-  ), 0) AS monthly_revenue,
-  COALESCE(SUM(pay.amount) FILTER (
-    WHERE pay.status = 'COMPLETED' AND pay.created_at >= date_trunc('year', NOW())
-  ), 0) AS yearly_revenue,
+  ROUND(COUNT(DISTINCT b.id) FILTER (WHERE b.status = 'OCCUPIED')::numeric / NULLIF(COUNT(DISTINCT b.id), 0) * 100, 1) AS occupancy_pct,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.created_at >= date_trunc('month', NOW())), 0) AS monthly_revenue,
+  COALESCE(SUM(pay.amount) FILTER (WHERE pay.status = 'COMPLETED' AND pay.created_at >= date_trunc('year', NOW())), 0) AS yearly_revenue,
   COUNT(DISTINCT c.id) FILTER (WHERE c.status IN ('OPEN', 'IN_PROGRESS')) AS open_complaints,
   COALESCE(AVG(rv.rating), 0) AS avg_rating
 FROM pgs p
@@ -806,7 +574,6 @@ GROUP BY p.owner_id, p.id, p.name, p.city, p.status;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_owner_dashboard_pg ON mv_owner_dashboard(pg_id);
 
--- 11b. Tenant dashboard view (live)
 CREATE OR REPLACE VIEW v_tenant_dashboard AS
 SELECT
   u.id AS user_id, u.name AS tenant_name, u.email,
@@ -826,10 +593,8 @@ WHERE u.deleted_at IS NULL
 GROUP BY u.id, u.name, u.email, bk.id, bk.status, bk.check_in_date,
          pg.id, pg.name, pg.address, pg.city, rm.room_code, rm.room_type, bd.bed_number, bd.price;
 
--- 11c. Payment reconciliation view
 CREATE OR REPLACE VIEW v_payment_reconciliation AS
-SELECT
-  p.id, p.amount, p.status, p.type AS payment_type, p.method,
+SELECT p.id, p.amount, p.status, p.type AS payment_type, p.method,
   p.razorpay_order_id, p.razorpay_payment_id, p.verification_note,
   p.created_at, p.paid_date, p.due_date,
   u.name AS tenant_name, u.email AS tenant_email, pg.name AS pg_name
@@ -841,108 +606,23 @@ ORDER BY p.created_at DESC;
 
 
 -- =============================================================
--- PART 12: Monetary Field Migration (DOUBLE PRECISION -> NUMERIC)
--- =============================================================
--- Safe: NUMERIC holds all DOUBLE PRECISION values. Run during low traffic.
-
-ALTER TABLE payments ALTER COLUMN amount TYPE NUMERIC(12,2);
-ALTER TABLE pgs ALTER COLUMN price TYPE NUMERIC(12,2);
-ALTER TABLE pgs ALTER COLUMN security_deposit TYPE NUMERIC(12,2);
-ALTER TABLE beds ALTER COLUMN price TYPE NUMERIC(12,2);
-ALTER TABLE bookings ALTER COLUMN advance_paid TYPE NUMERIC(12,2);
-
--- Update create_booking_atomic to use NUMERIC type
-CREATE OR REPLACE FUNCTION create_booking_atomic(
-  p_user_id TEXT,
-  p_pg_id TEXT,
-  p_bed_id TEXT,
-  p_check_in_date TIMESTAMPTZ,
-  p_advance_paid NUMERIC(12,2) DEFAULT 0
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_bed_status TEXT;
-  v_existing_booking_id TEXT;
-  v_booking_id TEXT;
-BEGIN
-  SELECT status INTO v_bed_status FROM beds WHERE id = p_bed_id FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('error', 'Bed not found', 'code', 'BED_NOT_FOUND');
-  END IF;
-
-  IF v_bed_status != 'AVAILABLE' THEN
-    RETURN jsonb_build_object('error', 'This bed is already booked. Please select another bed.', 'code', 'BED_OCCUPIED');
-  END IF;
-
-  SELECT id INTO v_existing_booking_id
-  FROM bookings WHERE bed_id = p_bed_id AND status IN ('PENDING', 'CONFIRMED', 'ACTIVE') FOR UPDATE;
-
-  IF v_existing_booking_id IS NOT NULL THEN
-    RETURN jsonb_build_object('error', 'This bed already has an active booking.', 'code', 'BOOKING_EXISTS');
-  END IF;
-
-  INSERT INTO bookings (user_id, pg_id, bed_id, check_in_date, advance_paid, status)
-  VALUES (p_user_id, p_pg_id, p_bed_id, p_check_in_date, p_advance_paid, 'PENDING')
-  RETURNING id INTO v_booking_id;
-
-  UPDATE beds SET status = 'OCCUPIED' WHERE id = p_bed_id;
-
-  RETURN jsonb_build_object(
-    'booking', jsonb_build_object('id', v_booking_id, 'user_id', p_user_id, 'pg_id', p_pg_id, 'bed_id', p_bed_id, 'status', 'PENDING')
-  );
-END;
-$$;
-
-
--- =============================================================
 -- PART 13: Database-Level Validation Functions
 -- =============================================================
 
-CREATE OR REPLACE FUNCTION is_valid_email(email TEXT)
-RETURNS BOOLEAN AS $$
+CREATE OR REPLACE FUNCTION is_valid_email(email TEXT) RETURNS BOOLEAN AS $$
   SELECT email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$';
 $$ LANGUAGE sql IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION is_valid_indian_phone(phone TEXT)
-RETURNS BOOLEAN AS $$
+CREATE OR REPLACE FUNCTION is_valid_indian_phone(phone TEXT) RETURNS BOOLEAN AS $$
   SELECT phone ~ '^\+91[6-9]\d{9}$' OR phone ~ '^[6-9]\d{9}$';
 $$ LANGUAGE sql IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION is_valid_ifsc(code TEXT)
-RETURNS BOOLEAN AS $$
+CREATE OR REPLACE FUNCTION is_valid_ifsc(code TEXT) RETURNS BOOLEAN AS $$
   SELECT code ~ '^[A-Z]{4}0[A-Z0-9]{6}$';
 $$ LANGUAGE sql IMMUTABLE;
 
 ALTER TABLE pgs ADD CONSTRAINT pgs_valid_ifsc
   CHECK (bank_ifsc_code IS NULL OR is_valid_ifsc(bank_ifsc_code));
-
-
--- =============================================================
--- PART 14: pg_cron Cleanup Jobs (optional)
--- =============================================================
--- Only run if pg_cron extension is available on your Supabase plan.
--- If you get an error here, skip this section.
-
--- CREATE EXTENSION IF NOT EXISTS pg_cron;
---
--- SELECT cron.schedule('cleanup-webhook-events', '0 3 * * *',
---   $$DELETE FROM webhook_events WHERE processed_at IS NOT NULL AND processed_at < NOW() - INTERVAL '7 days'$$
--- );
---
--- SELECT cron.schedule('cleanup-old-notifications', '0 4 * * *',
---   $$DELETE FROM notifications WHERE is_read = true AND created_at < NOW() - INTERVAL '90 days'$$
--- );
---
--- SELECT cron.schedule('refresh-owner-dashboard', '0 * * * *',
---   $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_owner_dashboard$$
--- );
---
--- SELECT cron.schedule('generate-monthly-rent', '0 6 1 * *',
---   $$SELECT generate_monthly_rent()$$
--- );
 
 
 -- =============================================================
