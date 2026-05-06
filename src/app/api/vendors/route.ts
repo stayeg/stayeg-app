@@ -2,6 +2,7 @@ import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
+import { stripHtml, isValidPhone, isValidEmail } from '@/lib/validation';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('vendors')
-      .select('*')
+      .select('id,name,type,phone,email,city,area,rating,description,created_at')
       .order('rating', { ascending: false });
 
     if (type) query = query.eq('type', type);
@@ -43,15 +44,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'name, type, and phone are required' }, { status: 400 });
     }
 
+    // Sanitize text inputs
+    const sanitizedName = stripHtml(String(body.name).trim()).slice(0, 100);
+    const sanitizedPhone = body.phone ? String(body.phone).trim() : '';
+    const sanitizedEmail = body.email ? String(body.email).trim().toLowerCase() : null;
+    const sanitizedCity = body.city ? stripHtml(String(body.city).trim()).slice(0, 50) : 'Bangalore';
+    const sanitizedArea = body.area ? stripHtml(String(body.area).trim()).slice(0, 100) : null;
+
+    // Validate phone if provided
+    if (sanitizedPhone && !isValidPhone(sanitizedPhone)) {
+      return NextResponse.json({ error: 'Please enter a valid phone number' }, { status: 400 });
+    }
+    if (sanitizedEmail && !isValidEmail(sanitizedEmail)) {
+      return NextResponse.json({ error: 'Please enter a valid email address' }, { status: 400 });
+    }
+
     const { data: vendor, error } = await supabaseAdmin
       .from('vendors')
       .insert({
-        name: body.name,
+        name: sanitizedName,
         type: body.type,
-        phone: body.phone,
-        email: body.email,
-        city: body.city || 'Bangalore',
-        area: body.area,
+        phone: sanitizedPhone,
+        email: sanitizedEmail,
+        city: sanitizedCity,
+        area: sanitizedArea,
       })
       .select()
       .single();

@@ -2,6 +2,8 @@ import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
+import { stripHtml } from '@/lib/validation';
+import { getPaginationParams, applyPaginationRange, createPaginatedResponse } from '@/lib/pagination';
 
 // GET /api/reviews?pgId=xxx — List reviews for a PG
 export async function GET(request: NextRequest) {
@@ -11,23 +13,29 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'pgId is required' }, { status: 400 });
     }
 
-    const { data, error } = await supabaseAdmin
+    const { data, error, count } = await supabaseAdmin
       .from('reviews')
       .select(`
         id, pg_id, user_id, rating, cleanliness, safety, value_for_money, amenities, management,
         comment, helpful_count, is_flagged, created_at,
         users:user_id (name, avatar)
-      `)
+      `, { count: 'exact' })
       .eq('pg_id', pgId)
-      .order('created_at', { ascending: false })
-      .limit(50);
+      .order('created_at', { ascending: false });
+
+    // Apply pagination (replaces hard limit of 50)
+    const pagination = getPaginationParams(request);
+    const { from, to } = applyPaginationRange(pagination);
 
     if (error) {
       console.error('GET /api/reviews error:', error);
       return NextResponse.json({ error: 'Failed to fetch reviews' }, { status: 500 });
     }
 
-    return NextResponse.json(data || []);
+    // Apply range manually since we already have data with count
+    const paginatedData = (data || []).slice(from, to + 1);
+
+    return NextResponse.json(createPaginatedResponse(paginatedData, count || 0, pagination));
   } catch (error) {
     captureException(error, { endpoint: 'GET /api/reviews' });
     console.error('GET /api/reviews error:', error);
@@ -70,7 +78,7 @@ export async function POST(request: NextRequest) {
         value_for_money: Math.round(valueForMoney || 0),
         amenities: Math.round(amenities || 0),
         management: Math.round(management || 0),
-        comment: comment.trim().slice(0, 2000),
+        comment: stripHtml(comment.trim()).slice(0, 2000),
       })
       .select('id, created_at')
       .single();

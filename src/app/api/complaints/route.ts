@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { captureException } from '@/lib/sentry-server';
 import { getPaginationParams, applyPaginationRange, createPaginatedResponse } from '@/lib/pagination';
+import { stripHtml } from '@/lib/validation';
 
 export async function GET(request: NextRequest) {
   try {
@@ -64,14 +65,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields (userId, pgId, title, description)' }, { status: 400 });
     }
 
+    // Sanitize text inputs
+    const sanitizedTitle = stripHtml(String(title).trim()).slice(0, 200);
+    const sanitizedDescription = stripHtml(String(description).trim()).slice(0, 2000);
+    const sanitizedCategory = category ? stripHtml(String(category).trim()).slice(0, 50) : 'GENERAL';
+
     const { data: complaint, error } = await supabaseAdmin
       .from('complaints')
       .insert({
         user_id: complaintUserId,
         pg_id: pgId,
-        title,
-        description,
-        category: category || 'GENERAL',
+        title: sanitizedTitle,
+        description: sanitizedDescription,
+        category: sanitizedCategory,
         priority: priority || 'MEDIUM',
       })
       .select('*, pg:pgs(name)')
@@ -100,7 +106,7 @@ export async function PUT(request: NextRequest) {
     const updateData: Record<string, unknown> = {};
     if (status) updateData.status = status;
     if (assignedTo !== undefined) updateData.assigned_to = assignedTo;
-    if (resolution !== undefined) updateData.resolution = resolution;
+    if (resolution !== undefined) updateData.resolution = stripHtml(String(resolution).trim()).slice(0, 2000);
 
     const { data: complaint, error } = await supabaseAdmin
       .from('complaints')

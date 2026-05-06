@@ -19,6 +19,7 @@ import { hashPassword, verifyPassword } from '@/lib/password';
 import { signToken } from '@/lib/jwt';
 import { captureException } from '@/lib/sentry-server';
 import { isValidEmail, isValidPhone, stripHtml, isValidLength } from '@/lib/validation';
+import { isValidPositiveNumber } from '@/lib/validation';
 
 // Safe user fields — NEVER include password_hash in API responses
 const SAFE_USER_FIELDS = 'id,name,email,phone,role,avatar,gender,is_verified,is_approved,city,occupation,bio,created_at,bank_account_number,bank_ifsc,bank_name,account_holder_name,upi_id';
@@ -110,7 +111,10 @@ export async function POST(request: NextRequest) {
       }
 
       if (!users || users.length === 0) {
-        return NextResponse.json({ error: 'User not found', code: 'USER_NOT_FOUND' }, { status: 404 });
+        // SECURITY: Return same error as wrong password to prevent user enumeration
+        // Small delay to prevent timing-based user enumeration
+        await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 50));
+        return NextResponse.json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' }, { status: 401 });
       }
 
       const user = users[0];
@@ -119,10 +123,10 @@ export async function POST(request: NextRequest) {
       if (user.password_hash && password) {
         const isValid = await verifyPassword(password, user.password_hash);
         if (!isValid) {
-          return NextResponse.json({ error: 'Invalid password', code: 'INVALID_PASSWORD' }, { status: 401 });
+          return NextResponse.json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' }, { status: 401 });
         }
       } else if (user.password_hash && !password) {
-        return NextResponse.json({ error: 'Password required', code: 'PASSWORD_REQUIRED' }, { status: 401 });
+        return NextResponse.json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' }, { status: 401 });
       }
 
       // Generate JWT token
@@ -290,13 +294,20 @@ export async function PUT(request: NextRequest) {
     const updates: Record<string, unknown> = {};
     const allowedFields = ['name', 'phone', 'gender', 'city', 'occupation', 'bio', 'avatar', 'aadhaar_number', 'pan_number', 'kyc_status', 'bank_account_number', 'bank_ifsc', 'bank_name', 'account_holder_name', 'upi_id'];
 
+    // Text fields that need sanitization
+    const textFields = ['name', 'city', 'occupation', 'bio'];
+
     for (const field of allowedFields) {
       const snakeField = field.replace(/([A-Z])/g, '_$1').toLowerCase();
       if (body[field] !== undefined) {
-        updates[snakeField] = body[field];
+        updates[snakeField] = textFields.includes(field)
+          ? stripHtml(String(body[field]).trim()).slice(0, 500)
+          : body[field];
       }
       if (body[snakeField] !== undefined) {
-        updates[snakeField] = body[snakeField];
+        updates[snakeField] = textFields.includes(field)
+          ? stripHtml(String(body[snakeField]).trim()).slice(0, 500)
+          : body[snakeField];
       }
     }
 

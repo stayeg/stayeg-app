@@ -2,6 +2,7 @@ import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
+import { stripHtml, isValidPhone } from '@/lib/validation';
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('workers')
-      .select('*')
+      .select('id,name,role,phone,pg_id,shift,status,created_at')
       .order('role', { ascending: true });
 
     if (pgId) {
@@ -77,9 +78,9 @@ export async function POST(request: NextRequest) {
     const { data: worker, error } = await supabaseAdmin
       .from('workers')
       .insert({
-        name: body.name,
+        name: stripHtml(String(body.name).trim()).slice(0, 100),
         role: body.role,
-        phone: body.phone,
+        phone: isValidPhone(body.phone) ? body.phone.trim() : '',
         pg_id: body.pgId,
         shift: body.shift,
       })

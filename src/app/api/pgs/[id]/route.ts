@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
+import { captureException } from '@/lib/sentry-server';
 
 export async function GET(
   request: NextRequest,
@@ -25,7 +26,7 @@ export async function GET(
 
     const { data: pg, error } = await supabaseAdmin
       .from('pgs')
-      .select('*, owner:users(id,name,phone,avatar,email), rooms(*, beds(*))')
+      .select('*, owner:users(id,name,phone,avatar), rooms(*, beds(*))')
       .eq('id', id)
       .single();
 
@@ -79,6 +80,7 @@ export async function GET(
 
     return NextResponse.json(formatted);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/pgs/[id]' });
     console.error('Error fetching PG:', error);
     return NextResponse.json({ error: 'Failed to fetch PG' }, { status: 500 });
   }

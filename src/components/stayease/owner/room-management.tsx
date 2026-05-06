@@ -15,6 +15,16 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import {
@@ -40,6 +50,8 @@ export default function RoomManagement() {
   });
   const [bedCountForm, setBedCountForm] = useState('1');
   const [bedPriceForm, setBedPriceForm] = useState('');
+  const [vacateDialogOpen, setVacateDialogOpen] = useState(false);
+  const [vacateTarget, setVacateTarget] = useState<{ bedId: string; bedNumber: number } | null>(null);
 
   const ownerId = currentUser?.id;
 
@@ -354,7 +366,7 @@ export default function RoomManagement() {
                                         variant="outline"
                                         size="sm"
                                         className="text-xs h-7 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                        onClick={(e) => { e.stopPropagation(); toggleBedMutation.mutate({ bedId: bed.id, newStatus: 'AVAILABLE' }); toast.success(`Bed #${bed.bedNumber} set to Available`); }}
+                                        onClick={(e) => { e.stopPropagation(); setVacateTarget({ bedId: bed.id, bedNumber: bed.bedNumber }); setVacateDialogOpen(true); }}
                                       >
                                         <CheckCircle2 className="size-3 mr-1" />
                                         #{bed.bedNumber} Vacate
@@ -406,6 +418,33 @@ export default function RoomManagement() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Vacate Bed Confirmation Dialog */}
+      <AlertDialog open={vacateDialogOpen} onOpenChange={setVacateDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Vacate Bed #{vacateTarget?.bedNumber}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will mark the bed as available. If a tenant currently has this bed booked, their booking will still remain active. Make sure to coordinate with the tenant before vacating.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                if (vacateTarget) {
+                  toggleBedMutation.mutate({ bedId: vacateTarget.bedId, newStatus: 'AVAILABLE' });
+                  toast.success(`Bed #${vacateTarget.bedNumber} set to Available`);
+                }
+                setVacateDialogOpen(false);
+              }}
+            >
+              Yes, Vacate Bed
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

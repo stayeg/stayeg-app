@@ -99,6 +99,16 @@ export function isValidDate(date: string): boolean {
   return !isNaN(d.getTime());
 }
 
+/**
+ * Validate Indian IFSC code format (4 letters + 0 + 6 alphanumeric).
+ * Example: SBIN0001234
+ */
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+export function isValidIFSC(ifsc: string): boolean {
+  if (!ifsc || typeof ifsc !== 'string') return false;
+  return IFSC_REGEX.test(ifsc.trim().toUpperCase());
+}
+
 // ─── Field Validators ───────────────────────────────────────
 
 interface FieldRule {

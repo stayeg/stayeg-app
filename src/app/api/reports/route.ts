@@ -2,6 +2,7 @@ import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
+import { stripHtml } from '@/lib/validation';
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,9 +22,9 @@ export async function POST(request: NextRequest) {
     const { error } = await supabaseAdmin.from('reports').insert({
       reporter_id: reporterId,
       target_id: targetId,
-      target_type: targetType,
-      reason,
-      description,
+      target_type: stripHtml(String(targetType).trim()).slice(0, 50),
+      reason: stripHtml(String(reason).trim()).slice(0, 200),
+      description: stripHtml(String(description).trim()).slice(0, 2000),
       contact_email: contactEmail || null,
       status: 'PENDING',
     });

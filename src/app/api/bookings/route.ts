@@ -96,58 +96,13 @@ export async function POST(request: NextRequest) {
 
     if (rpcError) {
       console.error('Booking RPC error:', rpcError.message);
-      // Fallback to non-atomic approach if RPC function doesn't exist yet
-      console.warn('Falling back to non-atomic booking (RPC function may not exist)');
-
-      // Legacy non-atomic path (for DBs without the atomic function)
-      const { data: existingBed, error: bedCheckError } = await supabaseAdmin
-        .from('beds')
-        .select('status')
-        .eq('id', bedId)
-        .single();
-
-      if (bedCheckError) throw bedCheckError;
-
-      if (existingBed && existingBed.status === 'OCCUPIED') {
-        return NextResponse.json(
-          { error: 'This bed is already booked. Please select another bed.' },
-          { status: 409 }
-        );
-      }
-
-      const { data: activeBooking, error: activeCheckError } = await supabaseAdmin
-        .from('bookings')
-        .select('id')
-        .eq('bed_id', bedId)
-        .in('status', ['PENDING', 'CONFIRMED', 'ACTIVE'])
-        .maybeSingle();
-
-      if (activeCheckError) throw activeCheckError;
-
-      if (activeBooking) {
-        return NextResponse.json(
-          { error: 'This bed already has an active booking. Please select another bed.' },
-          { status: 409 }
-        );
-      }
-
-      const { data: booking, error: bookingError } = await supabaseAdmin
-        .from('bookings')
-        .insert({
-          user_id: userId,
-          pg_id: pgId,
-          bed_id: bedId,
-          check_in_date: new Date(checkInDate).toISOString(),
-          advance_paid: advancePaid || 0,
-        })
-        .select('*, pg:pgs(name), bed:beds(*)')
-        .single();
-
-      if (bookingError) throw bookingError;
-
-      await supabaseAdmin.from('beds').update({ status: 'OCCUPIED' }).eq('id', bedId);
-
-      return NextResponse.json(booking, { status: 201 });
+      // SECURITY: Non-atomic fallback has been REMOVED to prevent race conditions.
+      // The create_booking_atomic RPC function MUST exist in the database.
+      // If it doesn't, return an error instead of falling back to unsafe code.
+      const message = rpcError.message?.includes('function') ? 
+        'Booking system not available — atomic booking function missing. Please contact support.' :
+        'Failed to create booking. Please try again.';
+      return NextResponse.json({ error: message, code: 'BOOKING_FAILED' }, { status: 500 });
     }
 
     // Atomic RPC succeeded

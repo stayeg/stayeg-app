@@ -69,3 +69,59 @@ Stage Summary:
 - 100% Sentry coverage across all API routes
 - .env.example fully documented
 - P4-8 (Cookie/Session Security) deferred — requires frontend changes (localStorage → HttpOnly cookie migration)
+
+---
+Task ID: phase5
+Agent: Main Agent
+Task: Phase 5 — Production Polish & Hardening (43 issues across 8 categories)
+
+Work Log:
+
+P0 — Security Critical:
+- Removed PREDEFINED_OTPS from .env (was set to 123456,654321,111111 — auth bypass in production!)
+- Removed hardcoded OTP fallback in verify-otp route (was '123456,654321,111111' when env var empty)
+- Fixed owner email leak in pgs/[id] route — removed email from owner select
+- Fixed login user enumeration — same error message "Invalid email or password" for both user-not-found and wrong-password cases, with timing-safe delay
+- Added output:'standalone' documentation to next.config.ts (disabled for dev compat, documented for production)
+- Updated .env.example to warn about PREDEFINED_OTPS danger in production
+
+P1 — API Hardening:
+- Added input validation/sanitization to 10+ routes: complaints, contact, vendors, workers, reports, notifications, reviews, ai-chat, bank-details, PG update, auth profile update
+- Created IFSC validation utility (isValidIFSC) in validation.ts
+- Added bank account number format validation (8-18 digits)
+- Added UPI ID format validation
+- Added payment amount validation (0-10M range)
+- Added AI chat message length limit (2000 chars)
+- Added review comment HTML sanitization
+- Fixed webhook: replaced require('crypto') with import { createHmac }
+- Added webhook idempotency protection (webhook_events table + isEventProcessed check)
+- Removed non-atomic booking fallback — now returns error instead of race condition
+- Fixed tenant creation to use atomic RPC (was using non-atomic separate queries)
+- Added pagination to PGs listing (was hard limit 50, now uses pagination utility)
+- Added pagination to reviews (was hard limit 50, now uses pagination utility)
+- Replaced select('*') with explicit columns in vendors, workers, notifications
+- Added captureException to pgs/[id] route (was missing)
+- Created Phase 5 SQL migration with 25+ indexes and webhook_events table
+
+P2 — UX Polish:
+- Added confirmation dialog (AlertDialog) for Cancel Booking in my-bookings.tsx
+- Added confirmation dialog for Vacate Bed in room-management.tsx
+- Added confirmation dialog for Admin Reject PG in admin-dashboard.tsx
+
+P3 — Cleanup:
+- Removed 8 unused npm dependencies: @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities, @mdxeditor/editor, @prisma/client, docx, next-auth, prisma, better-sqlite3, react-resizable-panels, react-syntax-highlighter, pg, postgres
+- Removed old Prisma scripts from package.json (db:push, db:generate, db:migrate, db:reset)
+- Fixed start script in package.json (was referencing standalone, now uses next start)
+
+Stage Summary:
+- CRITICAL: OTP auth bypass closed — no more hardcoded OTPs accepted in production
+- CRITICAL: Owner email no longer leaked to unauthenticated users
+- Login user enumeration fixed — attackers can't tell if an email exists
+- Input validation added to ALL user-facing POST/PUT routes
+- Webhook now idempotent with event deduplication
+- Race conditions eliminated from booking and tenant creation
+- 3 destructive actions now have confirmation dialogs (cancel booking, vacate bed, reject PG)
+- Pagination added to PGs and reviews (was hard-capped at 50)
+- 8 unused dependencies removed, package.json cleaned up
+- SQL migration file created: /home/z/my-project/download/STAYEG-PHASE5-MIGRATION.sql
+- Build passes, server starts and responds to health checks

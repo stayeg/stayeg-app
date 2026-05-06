@@ -23,6 +23,16 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useAppStore } from '@/store/use-app-store';
 import { authFetch } from '@/lib/api-client';
 import { STATUSES } from '@/lib/constants';
@@ -37,6 +47,8 @@ export default function MyBookings() {
   const { currentUser, setCurrentView, setSelectedPG, showToast } = useAppStore();
   const queryClient = useQueryClient();
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
 
   const { data: bookings = [], isLoading, isError, refetch } = useQuery<Booking[]>({
     queryKey: ['bookings', currentUser?.id],
@@ -172,7 +184,10 @@ export default function MyBookings() {
                   <Button
                     variant="destructive"
                     size="sm"
-                    onClick={() => handleCancelBooking(booking.id)}
+                    onClick={() => {
+                      setCancelTargetId(booking.id);
+                      setCancelDialogOpen(true);
+                    }}
                     disabled={cancellingId === booking.id}
                     className="gap-1.5 text-xs"
                   >
@@ -379,6 +394,30 @@ export default function MyBookings() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Cancel Booking Confirmation Dialog */}
+      <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Booking?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. Your booking will be cancelled and the bed will be made available for others. Any advance paid may be refunded per the PG cancellation policy.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Booking</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                if (cancelTargetId) handleCancelBooking(cancelTargetId);
+                setCancelDialogOpen(false);
+              }}
+            >
+              Yes, Cancel Booking
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

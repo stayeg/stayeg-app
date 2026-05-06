@@ -33,6 +33,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
     }
 
+    // Limit message length to prevent SDK quota abuse
+    if (message.length > 2000) {
+      return NextResponse.json({ error: 'Message must be under 2000 characters' }, { status: 400 });
+    }
+
     // Dynamic import of z-ai-web-dev-sdk
     const ZAI = (await import('z-ai-web-dev-sdk')).default;
 

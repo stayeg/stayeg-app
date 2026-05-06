@@ -20,6 +20,16 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useAppStore } from '@/store/use-app-store';
 import { authFetch } from '@/lib/api-client';
@@ -28,6 +38,8 @@ import { STATUSES, CARD_BG, BADGE, TEXT_COLOR } from '@/lib/constants';
 export default function AdminDashboard() {
   const { showToast } = useAppStore();
   const queryClient = useQueryClient();
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<any>(null);
   const [activeSection, setActiveSection] = useState<'overview' | 'owner-approval'>('overview');
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -87,8 +99,21 @@ export default function AdminDashboard() {
   const tenantCount = users.filter((u: { role: string }) => u.role === 'TENANT').length;
 
   const handleVerify = (pg: any, action: 'approve' | 'reject') => {
-    const status = action === 'approve' ? 'APPROVED' : 'REJECTED';
-    updatePGMutation.mutate({ id: pg.id, status, isVerified: action === 'approve' });
+    if (action === 'reject') {
+      setRejectTarget(pg);
+      setRejectDialogOpen(true);
+      return;
+    }
+    const status = 'APPROVED';
+    updatePGMutation.mutate({ id: pg.id, status, isVerified: true });
+  };
+
+  const confirmReject = () => {
+    if (rejectTarget) {
+      updatePGMutation.mutate({ id: rejectTarget.id, status: 'REJECTED', isVerified: false });
+    }
+    setRejectDialogOpen(false);
+    setRejectTarget(null);
   };
 
   const openDetail = (pg: any) => {
@@ -414,6 +439,27 @@ export default function AdminDashboard() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Reject PG Confirmation Dialog */}
+      <AlertDialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reject PG Listing?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will reject <strong>{rejectTarget?.name}</strong>'s PG listing. The owner will need to resubmit for approval. This action can be reversed by approving the PG later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={confirmReject}
+            >
+              Yes, Reject PG
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

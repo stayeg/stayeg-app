@@ -23,6 +23,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Order ID and Payment ID are required' }, { status: 400 });
     }
 
+    // Validate amount if provided
+    if (amount !== undefined && (typeof amount !== 'number' || amount < 0 || amount > 10000000)) {
+      return NextResponse.json({ error: 'Invalid payment amount' }, { status: 400 });
+    }
+
     // Verify payment signature
     const isValid = await verifyPayment({ orderId, paymentId, signature });
 

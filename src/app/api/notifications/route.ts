@@ -10,6 +10,7 @@ import { captureException } from '@/lib/sentry-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/api-auth';
+import { stripHtml } from '@/lib/validation';
 
 // GET /api/notifications — List user's notifications
 export async function GET(request: NextRequest) {
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('notifications')
-      .select('*')
+      .select('id,user_id,title,message,type,is_read,data,created_at')
       .eq('user_id', authResult.user.id)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -74,8 +75,8 @@ export async function POST(request: NextRequest) {
       .from('notifications')
       .insert({
         user_id: targetUserId,
-        title,
-        message,
+        title: stripHtml(String(title).trim()).slice(0, 200),
+        message: stripHtml(String(message).trim()).slice(0, 1000),
         type: type || 'INFO',
         data: data || {},
       })

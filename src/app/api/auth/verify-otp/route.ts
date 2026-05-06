@@ -16,9 +16,11 @@ import { captureException } from '@/lib/sentry-server';
 
 const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
 
-// Pre-defined OTPs for development/testing — share these with test users
-// In production, remove these or set PREDEFINED_OTPS="" in .env
-const PREDEFINED_OTPS = (process.env.PREDEFINED_OTPS || '123456,654321,111111').split(',').map(s => s.trim());
+// Pre-defined OTPs for development/testing ONLY.
+// CRITICAL: PREDEFINED_OTPS MUST be empty in production.
+// The hardcoded fallback is REMOVED — if the env var is empty/missing,
+// no predefined OTPs will be accepted (forcing real SMS verification).
+const PREDEFINED_OTPS = (process.env.PREDEFINED_OTPS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 export async function POST(request: NextRequest) {
   try {

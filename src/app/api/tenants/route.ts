@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/tenants — Create a tenant (via booking)
+// POST /api/tenants — Create a tenant (via atomic booking)
 export async function POST(request: NextRequest) {
   try {
     const authResult = await requireSession(request);
@@ -117,61 +117,48 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check bed is available
-    const { data: bed, error: bedError } = await supabaseAdmin
-      .from('beds')
-      .select('status, room_id')
-      .eq('id', bedId)
-      .single();
+    // SECURITY FIX: Use atomic RPC function to prevent race conditions
+    // (same as POST /api/bookings — prevents double-booking)
+    const { data: rpcResult, error: rpcError } = await supabaseAdmin
+      .rpc('create_booking_atomic', {
+        p_user_id: userId,
+        p_pg_id: pgId,
+        p_bed_id: bedId,
+        p_check_in_date: checkInDate ? new Date(checkInDate).toISOString() : new Date().toISOString(),
+        p_advance_paid: advancePaid || 0,
+      });
 
-    if (bedError) throw bedError;
-
-    if (!bed || bed.status === 'OCCUPIED') {
-      return NextResponse.json(
-        { error: 'Bed is already occupied' },
-        { status: 400 }
-      );
+    if (rpcError) {
+      console.error('Tenant creation RPC error:', rpcError.message);
+      const message = rpcError.message?.includes('function') ?
+        'Booking system not available — atomic booking function missing. Please contact support.' :
+        'Failed to create tenant booking. Please try again.';
+      return NextResponse.json({ error: message }, { status: 500 });
     }
 
-    // Verify room belongs to PG
-    const { data: room } = await supabaseAdmin
-      .from('rooms')
-      .select('id, pg_id')
-      .eq('id', bed.room_id)
-      .single();
-
-    if (!room || room.pg_id !== pgId) {
-      return NextResponse.json(
-        { error: 'Bed does not belong to this PG' },
-        { status: 400 }
-      );
+    const result = rpcResult as any;
+    if (result.error) {
+      const status = result.code === 'BED_NOT_FOUND' ? 404 : 409;
+      return NextResponse.json({ error: result.error, code: result.code }, { status });
     }
 
-    // Create booking
-    const { data: booking, error } = await supabaseAdmin
+    // Fetch the full booking with relations for the response
+    const { data: booking, error: fetchError } = await supabaseAdmin
       .from('bookings')
-      .insert({
-        user_id: userId,
-        pg_id: pgId,
-        bed_id: bedId,
-        check_in_date: checkInDate ? new Date(checkInDate).toISOString() : new Date().toISOString(),
-        advance_paid: advancePaid || 0,
-        status: 'ACTIVE',
-      })
       .select('*, user:users(id,name,email,phone), bed:beds(id,bed_number,room_id, room:rooms(id,room_code,room_type,floor)), pg:pgs(id,name)')
+      .eq('id', result.booking.id)
       .single();
 
-    if (error) throw error;
-
-    // Mark bed as occupied
-    await supabaseAdmin.from('beds').update({ status: 'OCCUPIED' }).eq('id', bedId);
+    if (fetchError || !booking) {
+      return NextResponse.json(result.booking, { status: 201 });
+    }
 
     // Log activity
     try {
       await supabaseAdmin.from('activity_log').insert({
         owner_id: body.ownerId,
         action: 'TENANT_ADDED',
-        details: `Added tenant to bed #${(bed as Record<string, unknown>)?.bed_number || bedId}`,
+        details: `Added tenant to bed #${bedId}`,
       });
     } catch { /* ignore log failures */ }
 

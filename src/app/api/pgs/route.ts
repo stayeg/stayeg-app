@@ -2,7 +2,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, requireSessionWithRole } from '@/lib/api-auth';
 import { captureException } from '@/lib/sentry-server';
-import { sanitizeLikePattern, stripHtml, isValidPositiveNumber } from '@/lib/validation';
+import { sanitizeLikePattern, stripHtml, isValidPositiveNumber, isValidIFSC } from '@/lib/validation';
+import { getPaginationParams, applyPaginationRange, createPaginatedResponse } from '@/lib/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,7 +11,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from('pgs')
-      .select('*, owner:users(id,name,phone,avatar), rooms(*, beds(*))');
+      .select('*, owner:users(id,name,phone,avatar), rooms(*, beds(*))', { count: 'exact' });
 
     const ownerId = searchParams.get('ownerId') || '';
     const gender = searchParams.get('gender') || '';
@@ -55,9 +56,12 @@ export async function GET(request: NextRequest) {
     else if (sortBy === 'rating') query = query.order('rating', { ascending: false });
     else if (sortBy === 'newest') query = query.order('created_at', { ascending: false });
 
-    query = query.limit(50);
+    // Apply pagination (replaces hard limit of 50)
+    const pagination = getPaginationParams(request);
+    const { from, to } = applyPaginationRange(pagination);
+    query = query.range(from, to);
 
-    const { data: pgs, error } = await query;
+    const { data: pgs, count, error } = await query;
     if (error) {
       console.error('Error fetching PGs:', error.message);
       return NextResponse.json({ error: 'Failed to fetch PGs' }, { status: 500 });
@@ -76,7 +80,7 @@ export async function GET(request: NextRequest) {
       })) : [],
     }));
 
-    return NextResponse.json(formatted, {
+    return NextResponse.json(createPaginatedResponse(formatted, count || 0, pagination), {
       headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' },
     });
   } catch (error) {
@@ -172,23 +176,50 @@ export async function PUT(request: NextRequest) {
     }
 
     const updateData: Record<string, unknown> = {};
-    if (data.name !== undefined) updateData.name = data.name;
-    if (data.description !== undefined) updateData.description = data.description;
-    if (data.address !== undefined) updateData.address = data.address;
-    if (data.city !== undefined) updateData.city = data.city;
+    if (data.name !== undefined) updateData.name = stripHtml(String(data.name).trim()).slice(0, 200);
+    if (data.description !== undefined) updateData.description = stripHtml(String(data.description).trim()).slice(0, 2000);
+    if (data.address !== undefined) updateData.address = stripHtml(String(data.address).trim()).slice(0, 500);
+    if (data.city !== undefined) updateData.city = stripHtml(String(data.city).trim()).slice(0, 50);
     if (data.gender !== undefined) updateData.gender = data.gender;
-    if (data.price !== undefined) updateData.price = data.price;
-    if (data.securityDeposit !== undefined) updateData.security_deposit = data.securityDeposit;
+    if (data.price !== undefined) {
+      if (!isValidPositiveNumber(data.price, true)) {
+        return NextResponse.json({ error: 'Price must be a positive number' }, { status: 400 });
+      }
+      updateData.price = data.price;
+    }
+    if (data.securityDeposit !== undefined) {
+      if (!isValidPositiveNumber(data.securityDeposit, true)) {
+        return NextResponse.json({ error: 'Security deposit must be a positive number' }, { status: 400 });
+      }
+      updateData.security_deposit = data.securityDeposit;
+    }
     if (data.amenities !== undefined) updateData.amenities = Array.isArray(data.amenities) ? data.amenities.join(',') : data.amenities;
     if (data.images !== undefined) updateData.images = Array.isArray(data.images) ? data.images.join(',') : data.images;
 
     // Bank account details for PG owners (payment settlement)
-    if (data.bankAccountName !== undefined) updateData.bank_account_name = data.bankAccountName;
-    if (data.bankAccountNumber !== undefined) updateData.bank_account_number = data.bankAccountNumber;
-    if (data.bankIfscCode !== undefined) updateData.bank_ifsc_code = data.bankIfscCode;
-    if (data.bankName !== undefined) updateData.bank_name = data.bankName;
-    if (data.bankBranch !== undefined) updateData.bank_branch = data.bankBranch;
-    if (data.upiId !== undefined) updateData.upi_id = data.upiId;
+    if (data.bankAccountName !== undefined) updateData.bank_account_name = String(data.bankAccountName).trim().slice(0, 100);
+    if (data.bankAccountNumber !== undefined) {
+      const acctNum = String(data.bankAccountNumber).trim();
+      if (acctNum && (acctNum.length < 8 || acctNum.length > 18 || !/^\d+$/.test(acctNum))) {
+        return NextResponse.json({ error: 'Bank account number must be 8-18 digits' }, { status: 400 });
+      }
+      updateData.bank_account_number = acctNum;
+    }
+    if (data.bankIfscCode !== undefined) {
+      if (data.bankIfscCode && !isValidIFSC(String(data.bankIfscCode))) {
+        return NextResponse.json({ error: 'Invalid IFSC code format' }, { status: 400 });
+      }
+      updateData.bank_ifsc_code = String(data.bankIfscCode).trim().toUpperCase();
+    }
+    if (data.bankName !== undefined) updateData.bank_name = String(data.bankName).trim().slice(0, 100);
+    if (data.bankBranch !== undefined) updateData.bank_branch = String(data.bankBranch).trim().slice(0, 100);
+    if (data.upiId !== undefined) {
+      const upi = String(data.upiId).trim();
+      if (upi && !upi.includes('@')) {
+        return NextResponse.json({ error: 'Invalid UPI ID format' }, { status: 400 });
+      }
+      updateData.upi_id = upi;
+    }
 
     // SECURITY FIX (v3): Only ADMIN can change status and verification
     // Owners can no longer self-approve or self-verify their PGs

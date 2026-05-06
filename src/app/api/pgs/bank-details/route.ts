@@ -9,6 +9,8 @@
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionWithRole } from '@/lib/api-auth';
+import { captureException } from '@/lib/sentry-server';
+import { isValidIFSC } from '@/lib/validation';
 
 export async function PUT(request: NextRequest) {
   try {
@@ -38,14 +40,31 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Build update object — only include provided fields
+    // Build update object — only include provided fields, with validation
     const updateData: Record<string, unknown> = {};
-    if (bankAccountName !== undefined) updateData.bank_account_name = bankAccountName;
-    if (bankAccountNumber !== undefined) updateData.bank_account_number = bankAccountNumber;
-    if (bankIfscCode !== undefined) updateData.bank_ifsc_code = bankIfscCode;
-    if (bankName !== undefined) updateData.bank_name = bankName;
-    if (bankBranch !== undefined) updateData.bank_branch = bankBranch;
-    if (upiId !== undefined) updateData.upi_id = upiId;
+    if (bankAccountName !== undefined) updateData.bank_account_name = String(bankAccountName).trim().slice(0, 100);
+    if (bankAccountNumber !== undefined) {
+      const acctNum = String(bankAccountNumber).trim();
+      if (acctNum.length < 8 || acctNum.length > 18 || !/^\d+$/.test(acctNum)) {
+        return NextResponse.json({ error: 'Bank account number must be 8-18 digits' }, { status: 400 });
+      }
+      updateData.bank_account_number = acctNum;
+    }
+    if (bankIfscCode !== undefined) {
+      if (!isValidIFSC(bankIfscCode)) {
+        return NextResponse.json({ error: 'Invalid IFSC code format (e.g., SBIN0001234)' }, { status: 400 });
+      }
+      updateData.bank_ifsc_code = bankIfscCode.trim().toUpperCase();
+    }
+    if (bankName !== undefined) updateData.bank_name = String(bankName).trim().slice(0, 100);
+    if (bankBranch !== undefined) updateData.bank_branch = String(bankBranch).trim().slice(0, 100);
+    if (upiId !== undefined) {
+      const upi = String(upiId).trim();
+      if (upi && !upi.includes('@')) {
+        return NextResponse.json({ error: 'Invalid UPI ID format' }, { status: 400 });
+      }
+      updateData.upi_id = upi;
+    }
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json({ error: 'No bank details provided to update' }, { status: 400 });
@@ -70,6 +89,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json(maskedPg);
   } catch (error) {
+    captureException(error, { endpoint: 'PUT /api/pgs/bank-details' });
     console.error('Error updating bank details:', error);
     return NextResponse.json({ error: 'Failed to update bank details' }, { status: 500 });
   }
@@ -126,6 +146,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(maskedPg);
   } catch (error) {
+    captureException(error, { endpoint: 'GET /api/pgs/bank-details' });
     console.error('Error fetching bank details:', error);
     return NextResponse.json({ error: 'Failed to fetch bank details' }, { status: 500 });
   }
