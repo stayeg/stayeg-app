@@ -11,11 +11,14 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-const isConfigured = Boolean(supabaseUrl && supabaseServiceKey);
+// Use service_role key if available, otherwise fall back to anon key
+const activeKey = supabaseServiceKey || supabaseAnonKey;
+const isConfigured = Boolean(supabaseUrl && activeKey);
 
 export const supabaseAdmin: SupabaseClient = isConfigured
-  ? createClient(supabaseUrl, supabaseServiceKey, {
+  ? createClient(supabaseUrl, activeKey, {
       auth: {
         autoRefreshToken: false,
         persistSession: false,
@@ -24,3 +27,4 @@ export const supabaseAdmin: SupabaseClient = isConfigured
   : (null as unknown as SupabaseClient);
 
 export const isSupabaseAdminConfigured = isConfigured;
+export const isUsingServiceRole = Boolean(supabaseServiceKey);
